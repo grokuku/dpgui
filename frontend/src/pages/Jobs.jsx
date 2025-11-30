@@ -1,24 +1,21 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import { useForm, useFieldArray } from 'react-hook-form';
-import apiClient from '../api'; // Chemin ajusté
-import Terminal from '../components/Terminal'; // Chemin ajusté
+import { useNavigate } from 'react-router-dom';
+import apiClient from '../api';
 
 function Jobs() {
+  const navigate = useNavigate();
   const [generatedCmd, setGeneratedCmd] = useState(null);
+  const [configPayload, setConfigPayload] = useState(null);
   const [status, setStatus] = useState('idle');
   const [errorMsg, setErrorMsg] = useState('');
   
-  // États pour l'exécution (Phase 2)
-  const [isTraining, setIsTraining] = useState(false);
-  const [logs, setLogs] = useState([]);
-  const wsRef = useRef(null);
-
   const { register, control, handleSubmit, formState: { errors } } = useForm({
     defaultValues: {
       output_dir: 'output',
       epochs: 10,
       model: {
-        type: 'hunyuan-video',
+        type: 'z-image', // Default Z-Image
         params: {
             transformer_path: '/path/to/transformer.safetensors',
             vae_path: '/path/to/vae',
@@ -41,32 +38,11 @@ function Jobs() {
     name: "dataset_config.directories"
   });
 
-  // --- Gestion WebSocket ---
-  const connectWebSocket = () => {
-    if (wsRef.current) wsRef.current.close();
-
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // Attention: window.location.host inclut le port du frontend, il faut viser le backend
-    // Mais votre proxy Vite gère /api, donc on tente de passer par le même host
-    const wsUrl = `${protocol}//${window.location.host}/api/ws/logs`;
-    
-    console.log(`Connecting to WebSocket: ${wsUrl}`);
-    const ws = new WebSocket(wsUrl);
-
-    ws.onopen = () => setLogs(prev => [...prev, ">>> CONNECTED TO LOG STREAM <<<"]);
-    ws.onmessage = (event) => setLogs(prev => [...prev, event.data]);
-    ws.onclose = () => setLogs(prev => [...prev, ">>> CONNECTION CLOSED <<<"]);
-    wsRef.current = ws;
-  };
-
-  useEffect(() => {
-    return () => { if (wsRef.current) wsRef.current.close(); };
-  }, []);
-
   const onSubmit = async (data) => {
     setStatus('loading');
     setErrorMsg('');
     setGeneratedCmd(null);
+    setConfigPayload(null);
     
     if (!Array.isArray(data.dataset_config.resolutions)) {
         data.dataset_config.resolutions = [parseInt(data.dataset_config.resolutions)];
@@ -90,6 +66,7 @@ function Jobs() {
     try {
       const response = await apiClient.post('/generate-config', payload);
       setGeneratedCmd(response.data.command);
+      setConfigPayload(payload);
       setStatus('success');
     } catch (err) {
       console.error(err);
@@ -98,39 +75,25 @@ function Jobs() {
     }
   };
 
-  const handleStartTraining = async () => {
-      if (!generatedCmd) return;
+  const handleAddToPool = async () => {
+      if (!generatedCmd || !configPayload) return;
       try {
-          await apiClient.post('/start-training', { command: generatedCmd });
-          setIsTraining(true);
-          setLogs([]);
-          connectWebSocket();
+          await apiClient.post('/jobs', { command: generatedCmd, config: configPayload });
+          navigate('/');
       } catch (err) {
-          alert("Failed to start training: " + (err.response?.data?.detail || err.message));
-      }
-  };
-
-  const handleStopTraining = async () => {
-      if (!confirm("Are you sure you want to stop the training process?")) return;
-      try {
-          await apiClient.post('/stop-training');
-          setIsTraining(false);
-          setLogs(prev => [...prev, ">>> STOP SIGNAL SENT <<<"]);
-      } catch (err) {
-          alert("Error stopping training: " + err.message);
+          alert("Failed to create job: " + (err.response?.data?.detail || err.message));
       }
   };
 
   return (
     <div>
-      <h2>Create / Edit Job</h2>
-      {/* Formulaire de Configuration */}
-        <form onSubmit={handleSubmit(onSubmit)} className="config-form">
+      <h2>Create New Job (Z-Image)</h2>
+      <form onSubmit={handleSubmit(onSubmit)} className="config-form">
           <section className="card">
             <h3>Global Settings</h3>
             <div className="form-group">
               <label>Output Directory</label>
-              <input {...register("output_dir", { required: true })} placeholder="e.g., output (relative) or /abs/path" />
+              <input {...register("output_dir", { required: true })} />
             </div>
             <div className="form-group">
               <label>Epochs</label>
@@ -142,10 +105,12 @@ function Jobs() {
             <h3>Model Configuration</h3>
             <div className="form-group">
               <label>Model Type</label>
+              {/* LOCKDOWN: Seul Z-Image est sélectionnable */}
               <select {...register("model.type")}>
-                <option value="hunyuan-video">hunyuan-video</option>
-                <option value="flux">flux</option>
-                <option value="sdxl">sdxl</option>
+                <option value="z-image">Z-Image (Supported)</option>
+                <option value="hunyuan-video" disabled>hunyuan-video (Disabled)</option>
+                <option value="flux" disabled>flux (Disabled)</option>
+                <option value="sdxl" disabled>sdxl (Disabled)</option>
               </select>
             </div>
             <div className="form-group">
@@ -162,7 +127,7 @@ function Jobs() {
             {fields.map((field, index) => (
               <div key={field.id} className="dataset-row">
                 <div className="form-group flex-grow">
-                  <input {...register(`dataset_config.directories.${index}.path`, { required: true })} placeholder="e.g., data (relative) or /abs/path" />
+                  <input {...register(`dataset_config.directories.${index}.path`, { required: true })} placeholder="path/to/images" />
                 </div>
                 <div className="form-group w-small">
                   <input type="number" {...register(`dataset_config.directories.${index}.num_repeats`)} placeholder="Repeats" />
@@ -172,40 +137,22 @@ function Jobs() {
             ))}
           </section>
 
-          <button type="submit" className="btn-primary" disabled={status === 'loading' || isTraining}>
+          <button type="submit" className="btn-primary" disabled={status === 'loading'}>
             {status === 'loading' ? 'Generating...' : 'Generate Configuration'}
           </button>
-        </form>
+      </form>
 
-        {/* Zone de Résultat et d'Exécution */}
-        {status === 'success' && generatedCmd && (
-            <div className="card" style={{marginTop: '2rem', border: '1px solid #2ecc71'}}>
-                <h3>Ready to Launch</h3>
-                <div style={{background: '#111', padding: '1rem', overflowX: 'auto', marginBottom: '1rem'}}>
-                    <code>{generatedCmd}</code>
-                </div>
-                
-                <div className="action-row" style={{ display: 'flex', gap: '1rem' }}>
-                    {!isTraining ? (
-                        <button onClick={handleStartTraining} className="btn-primary" style={{ backgroundColor: '#2ecc71' }}>
-                            ▶ START TRAINING
-                        </button>
-                    ) : (
-                        <button onClick={handleStopTraining} className="btn-danger">
-                            ⏹ STOP TRAINING
-                        </button>
-                    )}
-                </div>
-            </div>
-        )}
-        
-        {/* Terminal de Logs */}
-        {(isTraining || logs.length > 0) && (
-            <div className="terminal-section" style={{ marginTop: '2rem' }}>
-                <h3>Training Logs</h3>
-                <Terminal logs={logs} />
-            </div>
-        )}
+      {status === 'success' && generatedCmd && (
+          <div className="card" style={{marginTop: '2rem', border: '1px solid #2ecc71'}}>
+              <h3>Configuration Validated</h3>
+              <div style={{background: '#111', padding: '1rem', overflowX: 'auto', marginBottom: '1rem'}}>
+                  <code>{generatedCmd}</code>
+              </div>
+              <button onClick={handleAddToPool} className="btn-primary" style={{ backgroundColor: '#2ecc71', width: '100%' }}>
+                  + SAVE TO JOB POOL
+              </button>
+          </div>
+      )}
     </div>
   );
 }

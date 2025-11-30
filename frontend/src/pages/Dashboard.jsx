@@ -1,109 +1,174 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import apiClient from '../api';
-import { Activity, Cpu, HardDrive } from 'lucide-react';
+import { Activity, Cpu, HardDrive, Play, Square, Trash2, FileText, X } from 'lucide-react';
+import Terminal from '../components/Terminal';
 
+// --- UI Components ---
 const ProgressBar = ({ percent, color = '#646cff', label }) => (
-    <div style={{ marginBottom: '1rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.2rem', fontSize: '0.9rem' }}>
+    <div style={{ marginBottom: '0.8rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.2rem', fontSize: '0.8rem', color: '#ccc' }}>
             <span>{label}</span>
             <span>{percent}%</span>
         </div>
-        <div style={{ height: '8px', background: '#333', borderRadius: '4px', overflow: 'hidden' }}>
-            <div style={{ 
-                width: `${Math.min(100, Math.max(0, percent))}%`, 
-                height: '100%', 
-                background: color,
-                transition: 'width 0.5s ease' 
-            }} />
+        <div style={{ height: '6px', background: '#333', borderRadius: '3px', overflow: 'hidden' }}>
+            <div style={{ width: `${Math.min(100, Math.max(0, percent))}%`, height: '100%', background: color, transition: 'width 0.5s ease' }} />
         </div>
     </div>
 );
 
+const StatusBadge = ({ status }) => {
+    const colors = { pending: '#f1c40f', running: '#3498db', completed: '#2ecc71', failed: '#e74c3c', stopped: '#95a5a6' };
+    return <span style={{ backgroundColor: colors[status] || '#777', color: '#fff', padding: '2px 8px', borderRadius: '4px', fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 'bold' }}>{status}</span>;
+};
+
+// --- Log Modal ---
+const LogModal = ({ job, onClose }) => {
+    const [content, setContent] = useState("Loading logs...");
+
+    useEffect(() => {
+        const fetchLogs = async () => {
+            try {
+                const res = await apiClient.get(`/jobs/${job.id}/logs`);
+                setContent(res.data.content);
+            } catch (e) {
+                setContent("Error fetching logs.");
+            }
+        };
+        fetchLogs();
+    }, [job]);
+
+    return (
+        <div style={{position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.8)', zIndex:1000, display:'flex', justifyContent:'center', alignItems:'center'}}>
+            <div className="card" style={{width:'80%', height:'80%', display:'flex', flexDirection:'column', position:'relative'}}>
+                <div style={{display:'flex', justifyContent:'space-between', marginBottom:'1rem'}}>
+                    <h3>Logs for Job {job.id}</h3>
+                    <button onClick={onClose} className="btn-secondary"><X size={20}/></button>
+                </div>
+                <textarea readOnly value={content} style={{flex:1, background:'#111', color:'#0f0', border:'none', padding:'1rem', fontFamily:'monospace'}} />
+            </div>
+        </div>
+    );
+};
+
+// --- Main Dashboard ---
 const Dashboard = () => {
   const [stats, setStats] = useState(null);
+  const [jobs, setJobs] = useState([]);
+  const [logs, setLogs] = useState([]);
+  const [viewLogJob, setViewLogJob] = useState(null);
+  
+  const wsRef = useRef(null);
+  const activeJobIdRef = useRef(null);
 
-  // Polling des stats toutes les 2 secondes
   useEffect(() => {
-    const fetchStats = async () => {
+    const fetchData = async () => {
         try {
-            const res = await apiClient.get('/system-stats');
-            setStats(res.data);
-        } catch (e) {
-            console.error("Failed to fetch stats", e);
-        }
+            const statsRes = await apiClient.get('/system-stats');
+            setStats(statsRes.data);
+            const jobsRes = await apiClient.get('/jobs');
+            setJobs(jobsRes.data);
+        } catch (e) { console.error(e); }
     };
-
-    fetchStats(); // Premier appel
-    const interval = setInterval(fetchStats, 2000);
+    fetchData();
+    const interval = setInterval(fetchData, 2000);
     return () => clearInterval(interval);
   }, []);
+
+  const runningJob = jobs.find(j => j.status === 'running');
+
+  // WebSocket for Running Job Only
+  useEffect(() => {
+    if (runningJob && activeJobIdRef.current !== runningJob.id) {
+        if (wsRef.current) wsRef.current.close();
+        activeJobIdRef.current = runningJob.id;
+        setLogs([]);
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/api/ws/logs`;
+        const ws = new WebSocket(wsUrl);
+        ws.onopen = () => setLogs(prev => [...prev, `>>> ATTACHED TO JOB ${runningJob.id} <<<`]);
+        ws.onmessage = (event) => { if (event.data !== 'PING') setLogs(prev => [...prev, event.data]); };
+        ws.onclose = () => { activeJobIdRef.current = null; };
+        wsRef.current = ws;
+    } else if (!runningJob && wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+        activeJobIdRef.current = null;
+    }
+  }, [runningJob]);
+
+  const handleQueue = async (id) => { await apiClient.post(`/jobs/${id}/queue`); };
+  const handleStop = async (id) => { await apiClient.post(`/jobs/${id}/stop`); };
+  const handleDelete = async (id) => { if(confirm("Delete job?")) await apiClient.delete(`/jobs/${id}`); };
+
+  // Split Jobs
+  const queueJobs = jobs.filter(j => ['pending', 'running'].includes(j.status));
+  const poolJobs = jobs.filter(j => !['pending', 'running'].includes(j.status));
 
   return (
     <div>
       <h2>Dashboard</h2>
-      
+      {viewLogJob && <LogModal job={viewLogJob} onClose={() => setViewLogJob(null)} />}
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1rem', marginBottom: '2rem' }}>
-        
-        {/* System Monitor Card */}
+        {/* System */}
         <div className="card">
-          <div style={{display:'flex', alignItems:'center', gap:'10px', marginBottom:'1rem'}}>
-             <Activity size={20} color="#646cff" />
-             <h3>System Resources</h3>
-          </div>
-          
+          <h3><Activity size={20} style={{verticalAlign:'bottom'}}/> System</h3>
           {stats ? (
              <>
-                <ProgressBar percent={stats.cpu} label="CPU Usage" color="#e74c3c" />
-                <ProgressBar percent={stats.ram.percent} label="RAM Usage" color="#f1c40f" />
-                
-                {stats.gpu.length > 0 ? (
-                    stats.gpu.map((g, idx) => (
-                        <div key={idx} style={{marginTop:'1rem', borderTop:'1px solid #444', paddingTop:'0.5rem'}}>
-                            <div style={{fontSize:'0.8rem', color:'#aaa', marginBottom:'0.5rem'}}>GPU {g.id}</div>
-                            <ProgressBar percent={g.usage} label="Compute" color="#2ecc71" />
-                            <ProgressBar percent={g.vram_percent} label={`VRAM (${(g.vram_used / 1024).toFixed(1)} / ${(g.vram_total / 1024).toFixed(1)} GB)`} color="#9b59b6" />
-                        </div>
-                    ))
-                ) : (
-                    <p style={{fontSize: '0.8rem', color: '#666', marginTop:'1rem'}}>No NVIDIA GPU detected.</p>
-                )}
+                <ProgressBar percent={stats.cpu} label="CPU" color="#e74c3c" />
+                <ProgressBar percent={stats.ram.percent} label="RAM" color="#f1c40f" />
+                {stats.gpu.map((g, idx) => <ProgressBar key={idx} percent={g.usage} label={`GPU ${g.id}`} color="#2ecc71" />)}
              </>
-          ) : (
-             <p>Loading stats...</p>
-          )}
+          ) : <p>Loading...</p>}
         </div>
 
-        {/* Active Job Placeholder (Future) */}
-        <div className="card">
-          <div style={{display:'flex', alignItems:'center', gap:'10px', marginBottom:'1rem'}}>
-             <Cpu size={20} color="#2ecc71" />
-             <h3>Active Job</h3>
-          </div>
-          <p>No active job running.</p>
+        {/* Active Job Terminal */}
+        <div className="card" style={{gridColumn: 'span 2'}}>
+          <h3><Cpu size={20} style={{verticalAlign:'bottom'}}/> Active Execution</h3>
+          {runningJob ? <Terminal logs={logs} /> : <div style={{padding:'2rem', textAlign:'center', color:'#666'}}>No job running. Waiting for queue...</div>}
         </div>
       </div>
 
-      {/* Queue Placeholder */}
-      <div className="card">
-        <div style={{display:'flex', alignItems:'center', gap:'10px', marginBottom:'1rem'}}>
-            <HardDrive size={20} color="#9b59b6" />
-            <h3>Queue Status</h3>
-        </div>
-        <table style={{ width: '100%', marginTop: '1rem', textAlign: 'left', borderCollapse:'collapse' }}>
-            <thead>
-                <tr style={{ borderBottom: '1px solid #444', color:'#888', fontSize:'0.9rem' }}>
-                    <th style={{padding:'0.5rem'}}>ID</th>
-                    <th>Type</th>
-                    <th>Status</th>
-                    <th>Created</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td colSpan="4" style={{ textAlign: 'center', padding: '2rem', color:'#666' }}>Queue is empty</td>
-                </tr>
-            </tbody>
-        </table>
+      <div style={{display:'flex', gap:'2rem', flexWrap:'wrap'}}>
+          
+          {/* Active Queue */}
+          <div style={{flex:1, minWidth:'400px'}}>
+              <h3 style={{color:'#3498db'}}>Active Queue (Next to Run)</h3>
+              {queueJobs.map(job => (
+                  <div key={job.id} className="card" style={{borderLeft: job.status==='running'?'4px solid #3498db':'4px solid #f1c40f'}}>
+                      <div style={{display:'flex', justifyContent:'space-between'}}>
+                          <strong>{job.config.model.type}</strong>
+                          <StatusBadge status={job.status} />
+                      </div>
+                      <div style={{fontSize:'0.8rem', color:'#aaa', margin:'0.5rem 0'}}>{job.id} - {new Date(job.created_at * 1000).toLocaleString()}</div>
+                      <div style={{display:'flex', gap:'0.5rem'}}>
+                          <button onClick={() => handleStop(job.id)} className="btn-secondary"><Square size={14}/> Stop/Deque</button>
+                          <button onClick={() => setViewLogJob(job)} className="btn-secondary"><FileText size={14}/> Logs</button>
+                      </div>
+                  </div>
+              ))}
+              {queueJobs.length === 0 && <p style={{color:'#666', fontStyle:'italic'}}>Queue is empty.</p>}
+          </div>
+
+          {/* Job Pool */}
+          <div style={{flex:1, minWidth:'400px'}}>
+              <h3 style={{color:'#95a5a6'}}>Job Pool & History</h3>
+              {poolJobs.map(job => (
+                  <div key={job.id} className="card" style={{opacity: 0.8}}>
+                      <div style={{display:'flex', justifyContent:'space-between'}}>
+                          <strong>{job.config.model.type}</strong>
+                          <StatusBadge status={job.status} />
+                      </div>
+                      <div style={{fontSize:'0.8rem', color:'#aaa', margin:'0.5rem 0'}}>{job.id} - {new Date(job.created_at * 1000).toLocaleString()}</div>
+                      <div style={{display:'flex', gap:'0.5rem'}}>
+                          <button onClick={() => handleQueue(job.id)} className="btn-primary" style={{padding:'4px 8px'}}><Play size={14}/> Enqueue</button>
+                          <button onClick={() => setViewLogJob(job)} className="btn-secondary"><FileText size={14}/> Logs</button>
+                          <button onClick={() => handleDelete(job.id)} className="btn-danger"><Trash2 size={14}/></button>
+                      </div>
+                  </div>
+              ))}
+              {poolJobs.length === 0 && <p style={{color:'#666', fontStyle:'italic'}}>No jobs in pool.</p>}
+          </div>
       </div>
     </div>
   );

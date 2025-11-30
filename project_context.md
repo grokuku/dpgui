@@ -1,11 +1,12 @@
 # Project Context: DPGui
 
 ## Current State
-- **Phase**: Phase 3 Started (Queue Management & GUI Restructuring).
+- **Phase**: Phase 3 Completed (Queue Logic & Z-Image Pivot). Ready for Phase 4.
 - **Status**: 
     - Full-stack launcher is operational (handles Node.js, Python env, Cloning).
     - Backend generates valid TOML files and resolves relative paths.
-    - Training process runs in background with real-time WebSocket log streaming.
+    - **Job System**: `JobManager` implemented with persistence (JSON) and "Pool vs Queue" logic.
+    - **Monitoring**: System resources (CPU/RAM/GPU) and real-time logs visible in Dashboard.
     - "Vendor" strategy implemented to handle complex dependency conflicts.
 
 ## Deployment Constraints
@@ -21,22 +22,28 @@
     - **Installs Frontend dependencies (React Router, Lucide, etc.) automatically.**
     - Starts Backend and Frontend.
 2.  **Backend (FastAPI)**:
-    - `process_manager.py`: Manages async subprocesses.
+    - `job_manager.py`: Orchestrates jobs, manages `jobs/` (JSON) and `logs/` persistence.
+    - `process_manager.py`: Manages async subprocesses (DeepSpeed).
     - `config_gen.py`: Resolves relative paths.
-    - WebSockets: Streams `stdout`/`stderr`.
+    - **Workflow**: Job Creation -> Pool (`STOPPED`) -> Queue (`PENDING`) -> Execution (`RUNNING`).
 3.  **Frontend (React/Vite)**:
     - Uses `vite.config.js` proxy.
     - **New Structure**: React Router based navigation (Dashboard, Jobs, Datasets, Settings).
+    - **Dashboard**: Split view "Active Queue" vs "Job Pool".
 
 ## Dependencies Management
 ### Backend (Python)
-- **Core**: `fastapi`, `uvicorn`, `python-multipart`, `toml`, `pydantic`.
-- **Vendorized**: `diffusion-pipe` (Core only), `ComfyUI` (Disabled), `HunyuanVideo` (Disabled).
+- **Core**: `fastapi`, `uvicorn`, `python-multipart`, `toml`, `pydantic` (V2 syntax), `psutil`.
+- **Vendorized**: 
+    - `diffusion-pipe` (Core).
+    - `ComfyUI` (Enabled - Required for Z-Image).
+    - `HunyuanVideo` (Disabled).
 
 ### Frontend (Node.js)
 - **Runtime**: Node v22.12.0 (LTS) auto-installed.
 - **Libs**: `axios`, `react-hook-form`, `react-router-dom` (Nav), `lucide-react` (Icons).
 
 ## Known Issues / Notes
-- **Python 3.12 Compatibility**: Handled via `launcher.sh`.
+- **Z-Image Priority**: The UI currently enforces **Z-Image** selection. Other models are disabled.
+- **Python 3.12 Compatibility**: Handled via `launcher.sh` (setuptools upgrade).
 - **Path Resolution**: Relative paths in UI are converted to absolute paths in TOML.

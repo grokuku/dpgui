@@ -1,5 +1,30 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Union, Dict, Any
+from enum import Enum
+import time
+
+# --- Enums ---
+class JobStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    STOPPED = "stopped"
+
+# --- Job Models ---
+class JobBase(BaseModel):
+    # Ce qui est nécessaire pour créer un job
+    config: 'TrainingConfig' 
+    command: str
+
+class Job(JobBase):
+    id: str
+    status: JobStatus = JobStatus.PENDING
+    created_at: float = Field(default_factory=time.time)
+    started_at: Optional[float] = None
+    ended_at: Optional[float] = None
+    error: Optional[str] = None
+    log_path: Optional[str] = None
 
 # --- Dataset Section ---
 
@@ -7,13 +32,11 @@ class DirectoryBlock(BaseModel):
     path: str
     mask_path: Optional[str] = None
     num_repeats: int = 1
-    # Overrides possible per directory
     resolutions: Optional[List[Union[int, List[int]]]] = None
     ar_buckets: Optional[List[Union[float, List[float]]]] = None
     frame_buckets: Optional[List[int]] = None
 
 class DatasetConfig(BaseModel):
-    # General Dataset Settings
     resolutions: List[Union[int, List[int]]] = [512]
     enable_ar_bucket: bool = True
     min_ar: Optional[float] = 0.5
@@ -23,16 +46,12 @@ class DatasetConfig(BaseModel):
     frame_buckets: Optional[List[int]] = None
     cache_shuffle_num: Optional[int] = 10
     cache_shuffle_delimiter: Optional[str] = ", "
-    
-    # Data Sources
     directories: List[DirectoryBlock] = []
 
 # --- Main Configuration Section ---
 
 class ModelConfig(BaseModel):
     type: str
-    # Dynamic fields - using Dict[str, Any] to accommodate various model params
-    # defined in GUI_PLAN.md (ckpt_path, transformer_dtype, etc.)
     params: Dict[str, Any] = {} 
 
 class AdapterConfig(BaseModel):
@@ -41,7 +60,6 @@ class AdapterConfig(BaseModel):
     rank: int = 32
     dtype: str = "bfloat16"
     init_from_existing: Optional[str] = None
-    # fuse_adapters not fully implemented in schema yet per MVP
 
 class OptimizerConfig(BaseModel):
     type: str = "adamw"
@@ -49,7 +67,6 @@ class OptimizerConfig(BaseModel):
     betas: List[float] = [0.9, 0.99]
     weight_decay: float = 0.01
     eps: float = 1e-8
-    # Additional optimizer specific args can be passed via extra fields if needed
 
 class MonitoringConfig(BaseModel):
     enable_wandb: bool = False
@@ -63,14 +80,10 @@ class EvaluationConfig(BaseModel):
     eval_before_first_step: bool = True
     eval_micro_batch_size_per_gpu: int = 1
     eval_gradient_accumulation_steps: int = 1
-    # Assuming eval_datasets structure is handled as a list of dicts for now
     eval_datasets: List[Dict[str, str]] = []
 
 class TrainingConfig(BaseModel):
-    # Global Paths
     output_dir: str
-    
-    # Global Training Params
     epochs: int = 1000
     max_steps: Optional[int] = 5000
     micro_batch_size_per_gpu: Union[int, List[List[int]]] = 1
@@ -82,7 +95,6 @@ class TrainingConfig(BaseModel):
     save_dtype: str = "bfloat16"
     compile: bool = True
     
-    # Sub-configurations
     dataset_config: DatasetConfig
     model: ModelConfig
     adapter: AdapterConfig
@@ -92,3 +104,8 @@ class TrainingConfig(BaseModel):
 
 class TrainingCommand(BaseModel):
     command: str
+    config: TrainingConfig
+
+# FIX PYDANTIC V2: model_rebuild() au lieu de update_forward_refs()
+JobBase.model_rebuild()
+Job.model_rebuild()

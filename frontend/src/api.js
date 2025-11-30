@@ -1,7 +1,7 @@
 import axios from 'axios';
 
-// On tape sur le chemin relatif '/api'.
-// Le proxy de Vite (configuré ci-dessus) redirigera vers le bon port backend.
+// On utilise le chemin relatif /api qui sera intercepté par le proxy Vite
+// et redirigé vers le backend (ex: http://127.0.0.1:56661)
 const apiClient = axios.create({
   baseURL: '/api',
   headers: {

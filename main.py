@@ -10,7 +10,7 @@ import shutil
 import subprocess
 from typing import List
 
-app = FastAPI(title="DPGui Backend", version="0.5.0")
+app = FastAPI(title="DPGui Backend", version="0.5.1")
 job_manager = JobManager()
 
 origins = ["http://localhost:5173", "http://127.0.0.1:5173", "*"]
@@ -20,19 +20,48 @@ app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True
 def get_gpu_stats():
     if shutil.which("nvidia-smi") is None: return None
     try:
-        result = subprocess.run(['nvidia-smi', '--query-gpu=index,utilization.gpu,memory.total,memory.used', '--format=csv,noheader,nounits'], capture_output=True, text=True)
+        # Added: temperature.gpu, fan.speed, clocks.current.graphics, power.draw, power.limit
+        cmd = [
+            'nvidia-smi', 
+            '--query-gpu=index,utilization.gpu,memory.total,memory.used,temperature.gpu,fan.speed,clocks.current.graphics,power.draw,power.limit', 
+            '--format=csv,noheader,nounits'
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0: return None
         gpus = []
         for line in result.stdout.strip().split('\n'):
-            idx, util, mem_total, mem_used = line.split(', ')
-            gpus.append({"id": idx, "usage": float(util), "vram_total": float(mem_total), "vram_used": float(mem_used), "vram_percent": round((float(mem_used) / float(mem_total)) * 100, 1)})
+            # Parse the CSV line safely
+            parts = [x.strip() for x in line.split(',')]
+            if len(parts) < 9: continue
+            
+            idx, util, mem_total, mem_used, temp, fan, clock, power_draw, power_limit = parts
+            
+            # Helper for safe float conversion
+            def safe_float(val):
+                try: return float(val)
+                except: return 0.0
+
+            gpus.append({
+                "id": idx,
+                "usage": safe_float(util),
+                "vram_total": safe_float(mem_total),
+                "vram_used": safe_float(mem_used),
+                "vram_percent": round((safe_float(mem_used) / max(1, safe_float(mem_total))) * 100, 1),
+                "temp": safe_float(temp),
+                "fan": safe_float(fan),
+                "clock": safe_float(clock),
+                "power_draw": safe_float(power_draw),
+                "power_limit": safe_float(power_limit)
+            })
         return gpus
-    except: return None
+    except Exception as e:
+        print(f"GPU Stats Error: {e}")
+        return None
 
 # --- Routes ---
 @app.get("/")
 async def read_root():
-    return {"status": "active", "service": "dpgui-backend", "version": "0.5.0", "active_job": job_manager.active_job_id}
+    return {"status": "active", "service": "dpgui-backend", "version": "0.5.1", "active_job": job_manager.active_job_id}
 
 @app.get("/system-stats")
 async def get_system_stats():

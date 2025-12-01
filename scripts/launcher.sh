@@ -141,12 +141,6 @@ echo "[Frontend] Checking React environment..."
 if [ ! -d "$FRONTEND_DIR" ]; then
     echo "[Frontend] Initializing new React project..."
     npx --yes create-vite@5.2.0 "$FRONTEND_DIR" --template react
-    
-    if [ ! -d "$FRONTEND_DIR" ]; then
-        echo "Error: Frontend directory creation failed. Please check your internet connection and npx availability."
-        exit 1
-    fi
-
     cd "$FRONTEND_DIR"
     npm install
     npm install axios react-hook-form react-router-dom lucide-react
@@ -159,10 +153,7 @@ else
     fi
 fi
 
-# --- Step 5: Get Hostname for Vite ---
-export DPGUI_HOSTNAME=$(hostname)
-
-# --- Step 6: Launch Services ---
+# --- Step 5: Launch Services ---
 
 BACKEND_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()')
 

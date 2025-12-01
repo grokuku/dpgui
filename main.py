@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Uplo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 from schemas import TrainingConfig, TrainingCommand, Job
 from config_gen import generate_toml_files, generate_deepspeed_command
 from job_manager import JobManager
@@ -13,11 +14,19 @@ import shutil
 import subprocess
 from typing import List, Optional
 
-app = FastAPI(title="DPGui Backend", version="0.7.0")
+app = FastAPI(title="DPGui Backend", version="0.7.2")
 job_manager = JobManager()
 
 origins = ["http://localhost:5173", "http://127.0.0.1:5173", "*"]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"], allow_expose_headers=["*"])
+
+app.add_middleware(
+    CORSMiddleware, 
+    allow_origins=origins, 
+    allow_credentials=True, 
+    allow_methods=["*"], 
+    allow_headers=["*"], 
+    expose_headers=["*"]
+)
 
 # --- GPU Stats (unchanged) ---
 def get_gpu_stats():
@@ -52,7 +61,7 @@ def get_gpu_stats():
 # --- General Routes (unchanged) ---
 @app.get("/")
 async def read_root():
-    return {"status": "active", "service": "dpgui-backend", "version": "0.7.0", "active_job": job_manager.active_job_id}
+    return {"status": "active", "service": "dpgui-backend", "version": "0.7.2", "active_job": job_manager.active_job_id}
 
 @app.get("/system-stats")
 async def get_system_stats():
@@ -82,7 +91,11 @@ class BatchAction(BaseModel):
     dataset: str
     images: List[str] # List of filenames
     action: str # 'trigger_word', 'resize', 'autotag'
-    payload: Optional[str] = None # e.g., the trigger word, or size
+    payload: Optional[str] = None 
+
+class DeleteImagesRequest(BaseModel):
+    dataset: str
+    images: List[str]
 
 class CaptionRequest(BaseModel):
     image_path: str # relative path "dataset/img.jpg"
@@ -117,6 +130,24 @@ async def clone_dataset_endpoint(data: DatasetAction):
     if dataset_utils.clone_dataset(data.name, data.new_name):
         return {"status": "success"}
     raise HTTPException(status_code=400, detail="Failed to clone")
+
+@app.post("/datasets/delete_images")
+async def delete_images_endpoint(req: DeleteImagesRequest):
+    count = dataset_utils.delete_dataset_images(req.dataset, req.images)
+    return {"deleted": count}
+
+@app.get("/datasets/{name}/export")
+async def export_dataset(name: str):
+    zip_path = dataset_utils.zip_dataset(name)
+    if not zip_path:
+        raise HTTPException(status_code=404, detail="Dataset not found or failed to zip")
+    
+    # Nettoyage automatique du fichier temporaire après l'envoi
+    def cleanup():
+        try: os.remove(zip_path)
+        except: pass
+        
+    return FileResponse(zip_path, filename=f"{name}.zip", background=BackgroundTask(cleanup))
 
 @app.get("/datasets/{name}/images")
 async def get_dataset_images(name: str):

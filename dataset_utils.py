@@ -1,6 +1,8 @@
 import os
 import io
 import shutil
+import zipfile
+import tempfile
 from PIL import Image
 from typing import List, Dict, Optional, Tuple
 
@@ -63,6 +65,29 @@ def clone_dataset(source_name: str, new_name: str) -> bool:
         return False
     shutil.copytree(source_path, new_path)
     return True
+
+def zip_dataset(dataset_name: str) -> Optional[str]:
+    """Crée une archive ZIP temporaire du dataset."""
+    dataset_path = os.path.join(DATA_ROOT, dataset_name)
+    if not is_safe_path(dataset_path) or not os.path.exists(dataset_path):
+        return None
+        
+    # Création d'un fichier temporaire
+    fd, zip_path = tempfile.mkstemp(suffix=".zip")
+    os.close(fd)
+    
+    try:
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root, dirs, files in os.walk(dataset_path):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, dataset_path)
+                    zipf.write(file_path, arcname)
+        return zip_path
+    except Exception:
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+        return None
 
 # --- Image Operations ---
 
@@ -131,6 +156,29 @@ def save_image(dataset_name: str, file_data: bytes, filename: str) -> bool:
         return True
     except:
         return False
+
+def delete_dataset_images(dataset_name: str, filenames: List[str]) -> int:
+    dataset_path = os.path.join(DATA_ROOT, dataset_name)
+    if not is_safe_path(dataset_path): return 0
+    
+    count = 0
+    for fname in filenames:
+        # Image
+        img_path = os.path.join(dataset_path, fname)
+        if os.path.exists(img_path):
+            try:
+                os.remove(img_path)
+                count += 1
+            except: pass
+        
+        # Caption associée
+        base_name = os.path.splitext(fname)[0]
+        txt_path = os.path.join(dataset_path, base_name + ".txt")
+        if os.path.exists(txt_path):
+            try: os.remove(txt_path)
+            except: pass
+            
+    return count
 
 # --- Batch Operations ---
 

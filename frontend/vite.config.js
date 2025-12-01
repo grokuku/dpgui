@@ -19,6 +19,8 @@ export default defineConfig(({ mode }) => {
           rewrite: (path) => path.replace(/^\/api/, ''),
         },
       },
+      // Allow any host to connect, useful for local networks and reverse proxies
+      allowedHosts: ['*'],
     },
   }
 })

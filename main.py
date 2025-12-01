@@ -1,26 +1,28 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response, FileResponse
+from pydantic import BaseModel
 from schemas import TrainingConfig, TrainingCommand, Job
 from config_gen import generate_toml_files, generate_deepspeed_command
 from job_manager import JobManager
+import dataset_utils
 import os
 import asyncio
 import psutil
 import shutil
 import subprocess
-from typing import List
+from typing import List, Optional
 
-app = FastAPI(title="DPGui Backend", version="0.5.1")
+app = FastAPI(title="DPGui Backend", version="0.7.0")
 job_manager = JobManager()
 
 origins = ["http://localhost:5173", "http://127.0.0.1:5173", "*"]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"], allow_expose_headers=["*"])
 
-# --- Utils (GPU) ---
+# --- GPU Stats (unchanged) ---
 def get_gpu_stats():
     if shutil.which("nvidia-smi") is None: return None
     try:
-        # Added: temperature.gpu, fan.speed, clocks.current.graphics, power.draw, power.limit
         cmd = [
             'nvidia-smi', 
             '--query-gpu=index,utilization.gpu,memory.total,memory.used,temperature.gpu,fan.speed,clocks.current.graphics,power.draw,power.limit', 
@@ -30,38 +32,27 @@ def get_gpu_stats():
         if result.returncode != 0: return None
         gpus = []
         for line in result.stdout.strip().split('\n'):
-            # Parse the CSV line safely
             parts = [x.strip() for x in line.split(',')]
             if len(parts) < 9: continue
-            
             idx, util, mem_total, mem_used, temp, fan, clock, power_draw, power_limit = parts
-            
-            # Helper for safe float conversion
             def safe_float(val):
                 try: return float(val)
                 except: return 0.0
-
             gpus.append({
-                "id": idx,
-                "usage": safe_float(util),
-                "vram_total": safe_float(mem_total),
-                "vram_used": safe_float(mem_used),
-                "vram_percent": round((safe_float(mem_used) / max(1, safe_float(mem_total))) * 100, 1),
-                "temp": safe_float(temp),
-                "fan": safe_float(fan),
-                "clock": safe_float(clock),
-                "power_draw": safe_float(power_draw),
-                "power_limit": safe_float(power_limit)
+                "id": idx, "usage": safe_float(util), "vram_total": safe_float(mem_total),
+                "vram_used": safe_float(mem_used), "vram_percent": round((safe_float(mem_used) / max(1, safe_float(mem_total))) * 100, 1),
+                "temp": safe_float(temp), "fan": safe_float(fan), "clock": safe_float(clock),
+                "power_draw": safe_float(power_draw), "power_limit": safe_float(power_limit)
             })
         return gpus
     except Exception as e:
         print(f"GPU Stats Error: {e}")
         return None
 
-# --- Routes ---
+# --- General Routes (unchanged) ---
 @app.get("/")
 async def read_root():
-    return {"status": "active", "service": "dpgui-backend", "version": "0.5.1", "active_job": job_manager.active_job_id}
+    return {"status": "active", "service": "dpgui-backend", "version": "0.7.0", "active_job": job_manager.active_job_id}
 
 @app.get("/system-stats")
 async def get_system_stats():
@@ -79,14 +70,115 @@ async def generate_config(config: TrainingConfig):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
-# --- Job Routes ---
+# ==========================================
+# --- DATASET MANAGEMENT API ---
+# ==========================================
+
+class DatasetAction(BaseModel):
+    name: str
+    new_name: Optional[str] = None
+
+class BatchAction(BaseModel):
+    dataset: str
+    images: List[str] # List of filenames
+    action: str # 'trigger_word', 'resize', 'autotag'
+    payload: Optional[str] = None # e.g., the trigger word, or size
+
+class CaptionRequest(BaseModel):
+    image_path: str # relative path "dataset/img.jpg"
+    content: str
+
+@app.get("/datasets")
+async def get_datasets_list():
+    return dataset_utils.list_datasets()
+
+@app.post("/datasets/create")
+async def create_dataset_endpoint(data: DatasetAction):
+    if dataset_utils.create_dataset(data.name):
+        return {"status": "success"}
+    raise HTTPException(status_code=400, detail="Dataset already exists or invalid name")
+
+@app.post("/datasets/delete")
+async def delete_dataset_endpoint(data: DatasetAction):
+    if dataset_utils.delete_dataset(data.name):
+        return {"status": "success"}
+    raise HTTPException(status_code=400, detail="Failed to delete")
+
+@app.post("/datasets/rename")
+async def rename_dataset_endpoint(data: DatasetAction):
+    if not data.new_name: raise HTTPException(status_code=400, detail="New name missing")
+    if dataset_utils.rename_dataset(data.name, data.new_name):
+        return {"status": "success"}
+    raise HTTPException(status_code=400, detail="Failed to rename")
+
+@app.post("/datasets/clone")
+async def clone_dataset_endpoint(data: DatasetAction):
+    if not data.new_name: raise HTTPException(status_code=400, detail="New name missing")
+    if dataset_utils.clone_dataset(data.name, data.new_name):
+        return {"status": "success"}
+    raise HTTPException(status_code=400, detail="Failed to clone")
+
+@app.get("/datasets/{name}/images")
+async def get_dataset_images(name: str):
+    return dataset_utils.list_images(name)
+
+@app.get("/datasets/thumbnail")
+async def get_thumbnail(path: str):
+    """Path is 'dataset_name/image.jpg'"""
+    data = dataset_utils.get_thumbnail(path)
+    if data:
+        return Response(content=data, media_type="image/jpeg")
+    raise HTTPException(status_code=404, detail="Image not found")
+
+@app.get("/datasets/image_raw")
+async def get_raw_image(path: str):
+    full_path = os.path.join(dataset_utils.DATA_ROOT, path)
+    if not dataset_utils.is_safe_path(full_path) or not os.path.exists(full_path):
+         raise HTTPException(status_code=404, detail="Image not found")
+    return FileResponse(full_path)
+
+@app.get("/datasets/caption")
+async def get_caption(path: str):
+    content = dataset_utils.read_caption(path)
+    return {"content": content}
+
+@app.post("/datasets/caption")
+async def update_caption(req: CaptionRequest):
+    if dataset_utils.save_caption(req.image_path, req.content):
+        return {"status": "success"}
+    raise HTTPException(status_code=500, detail="Failed to save caption")
+
+@app.post("/datasets/batch")
+async def batch_operation(req: BatchAction):
+    if req.action == "trigger_word":
+        count = dataset_utils.batch_add_trigger(req.dataset, req.images, req.payload, position="start")
+        return {"processed": count}
+    elif req.action == "resize":
+        # Default to 1024 if not provided
+        size = int(req.payload) if req.payload else 1024
+        count = dataset_utils.batch_resize_images(req.dataset, req.images, resolution=size)
+        return {"processed": count}
+    elif req.action == "autotag":
+        # Placeholder for now
+        return {"processed": 0, "message": "Auto-tagging requires external model (Coming in Phase 4.1)"}
+    
+    raise HTTPException(status_code=400, detail="Unknown action")
+
+@app.post("/datasets/{name}/upload")
+async def upload_images(name: str, files: List[UploadFile] = File(...)):
+    count = 0
+    for file in files:
+        content = await file.read()
+        if dataset_utils.save_image(name, content, file.filename):
+            count += 1
+    return {"uploaded": count}
+
+# --- Job Routes (unchanged) ---
 @app.get("/jobs", response_model=List[Job])
-async def list_jobs():
-    return job_manager.list_jobs()
+async def list_jobs(): return job_manager.list_jobs()
 
 @app.post("/jobs", response_model=Job)
-async def create_job(cmd_data: TrainingCommand):
-    return job_manager.create_job(cmd_data.config, cmd_data.command)
+async def create_job(cmd_data: TrainingCommand): return job_manager.create_job(cmd_data.config, cmd_data.command)
 
 @app.delete("/jobs/{job_id}")
 async def delete_job(job_id: str):
@@ -95,19 +187,16 @@ async def delete_job(job_id: str):
 
 @app.post("/jobs/{job_id}/queue")
 async def queue_job(job_id: str):
-    """Déplace un job du pool vers la queue."""
     job_manager.queue_job(job_id)
     return {"status": "queued"}
 
 @app.post("/jobs/{job_id}/stop")
 async def stop_job(job_id: str):
-    """Arrête ou sort de la queue."""
     await job_manager.stop_job(job_id)
     return {"status": "stopped"}
 
 @app.get("/jobs/{job_id}/logs")
 async def get_job_logs(job_id: str):
-    """Récupère le contenu du fichier de log."""
     content = job_manager.read_log_file(job_id)
     return {"content": content}
 

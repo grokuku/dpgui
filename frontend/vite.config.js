@@ -11,6 +11,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
+      allowedHosts: true, // Autorise tous les hosts (nécessaire pour Docker/AiKore)
       proxy: {
         '/api': {
           target: apiUrl,

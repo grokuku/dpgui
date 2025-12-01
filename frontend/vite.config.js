@@ -21,6 +21,11 @@ export default defineConfig(({ mode }) => {
       },
       // Allow any host to connect, useful for local networks and reverse proxies
       allowedHosts: ['*'],
+      // Explicit HMR configuration to guide client in containerized/proxied environments
+      hmr: {
+        host: '172.20.0.5', // Use the network IP Vite reports
+        clientPort: 9002,  // Use the frontend port
+      },
     },
   }
 })

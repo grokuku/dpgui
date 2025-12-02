@@ -32,17 +32,66 @@ const MODEL_TEMPLATES = {
   'z-image': {
     label: 'Z-Image',
     fields: [
-      { name: 'transformer_path', label: 'Transformer (Path or HF ID)', required: true },
-      { name: 'vae_path', label: 'VAE (Path or HF ID)', required: true },
-      { name: 'llm_path', label: 'LLM (Path or HF ID)', required: true }
+      { name: 'transformer_path', label: 'Transformer (Path or HF ID)', required: true, default_repo: "tencent/HunyuanVideo" },
+      { name: 'vae_path', label: 'VAE (Path or HF ID)', required: true, default_repo: "tencent/HunyuanVideo" },
+      { name: 'llm_path', label: 'LLM (Path or HF ID)', required: true, default_repo: "xtuner/llava-llama-3-8b-v1_1-transformers" }
+    ]
+  },
+  'hunyuan-video': {
+    label: 'HunyuanVideo',
+    fields: [
+      { name: 'transformer_path', label: 'Transformer (Path or HF ID)', required: true, default_repo: "tencent/HunyuanVideo" },
+      { name: 'vae_path', label: 'VAE (Path or HF ID)', required: true, default_repo: "tencent/HunyuanVideo" },
+      { name: 'llm_path', label: 'LLM (Path or HF ID)', required: true, default_repo: "xtuner/llava-llama-3-8b-v1_1-transformers" }
     ]
   },
   'flux': {
     label: 'Flux.1',
     fields: [
-      { name: 'transformer_path', label: 'Transformer Path', required: true },
-      { name: 't5_path', label: 'T5 Encoder Path', required: true },
-      { name: 'clip_path', label: 'CLIP Path', required: true }
+      { name: 'transformer_path', label: 'Transformer Path', required: true, default_repo: "black-forest-labs/FLUX.1-dev" },
+      { name: 't5_path', label: 'T5 Encoder Path', required: true, default_repo: "city96/t5-v1_1-xxl-encoder-bf16" },
+      { name: 'clip_path', label: 'CLIP Path', required: true, default_repo: "openai/clip-vit-large-patch14" }
+    ]
+  },
+  'ltx-video': {
+    label: 'LTX-Video',
+    fields: [
+      { name: 'transformer_path', label: 'Transformer', required: true, default_repo: "Lightricks/LTX-Video" },
+      { name: 'vae_path', label: 'VAE', required: true, default_repo: "Lightricks/LTX-Video" },
+      { name: 'text_encoder_path', label: 'Text Encoder (T5)', required: true, default_repo: "Lightricks/LTX-Video" }
+    ]
+  },
+  'sdxl': {
+    label: 'SDXL',
+    fields: [
+      { name: 'checkpoint_path', label: 'Checkpoint Path', required: true, default_repo: "stabilityai/stable-diffusion-xl-base-1.0" },
+      { name: 'vae_path', label: 'VAE', required: false, default_repo: "madebyollin/sdxl-vae-fp16-fix" }
+    ]
+  },
+  'wan': {
+    label: 'Wan2.1 (Video)',
+    fields: [
+      { name: 'ckpt_path', label: 'Checkpoint Path', required: true, default_repo: "Wan-AI/Wan2.1-T2V-1.3B" },
+      { name: 't5_checkpoint_path', label: 'T5 Path (Optional)', required: false, default_repo: "Wan-AI/Wan2.1-T2V-1.3B" }
+    ]
+  },
+  'lumina_2': {
+    label: 'Lumina Image 2.0',
+    fields: [
+      { name: 'transformer_path', label: 'Transformer Path', required: true, default_repo: "Alpha-VLLM/Lumina-Image-2.0" }
+    ]
+  },
+  'cosmos': {
+    label: 'NVIDIA Cosmos',
+    fields: [
+      { name: 'transformer_path', label: 'Transformer Path', required: true, default_repo: "nvidia/Cosmos-1.0-Diffusion-7B-Text2World" },
+      { name: 'vae_path', label: 'VAE Path', required: true, default_repo: "nvidia/Cosmos-1.0-Diffusion-7B-Text2World" }
+    ]
+  },
+  'auraflow': {
+    label: 'AuraFlow',
+    fields: [
+      { name: 'transformer_path', label: 'Transformer Path', required: true, default_repo: "fal/AuraFlow-v0.3" }
     ]
   }
 };
@@ -61,10 +110,11 @@ const LabelWithTooltip = ({ label, tooltipKey }) => (
 );
 
 // Composant Modal Download
-const DownloadModal = ({ onClose, onSuccess }) => {
-  const [repoId, setRepoId] = useState('');
+const DownloadModal = ({ onClose, onSuccess, initialRepo = '' }) => {
+  const [repoId, setRepoId] = useState(initialRepo);
   const [hfToken, setHfToken] = useState('');
   const [status, setStatus] = useState('idle'); // idle, downloading, success, error
+  const [downloadedSize, setDownloadedSize] = useState('0 MB');
   const [error, setError] = useState(null);
 
   // Polling du statut
@@ -82,6 +132,9 @@ const DownloadModal = ({ onClose, onSuccess }) => {
           setStatus('error');
           setError(s.error);
           clearInterval(interval);
+        } else {
+          // Update size
+          setDownloadedSize(s.downloaded_size || "0 MB");
         }
       }, 1000);
     }
@@ -149,8 +202,8 @@ const DownloadModal = ({ onClose, onSuccess }) => {
             {status === 'downloading' && (
               <div style={{ margin: '1rem 0', textAlign: 'center', color: '#646cff' }}>
                 <div className="spin" style={{ display: 'inline-block', marginBottom: '10px' }}>⏳</div>
-                <div>Downloading... Check server console for progress.</div>
-                <small style={{ color: '#666' }}>This runs in background. Do not close backend.</small>
+                <div>Downloading... {downloadedSize}</div>
+                <small style={{ color: '#666', display: 'block' }}>Do not close backend.</small>
               </div>
             )}
 
@@ -178,6 +231,7 @@ function Jobs() {
   const [datasets, setDatasets] = useState([]);
   const [systemGpus, setSystemGpus] = useState([]);
   const [datasetImageCount, setDatasetImageCount] = useState(0);
+  const [localModels, setLocalModels] = useState([]);
 
   const [generatedCmd, setGeneratedCmd] = useState(null);
   const [configPayload, setConfigPayload] = useState(null);
@@ -185,10 +239,10 @@ function Jobs() {
   const [errorMsg, setErrorMsg] = useState('');
 
   // State pour la modal download
-  const [downloadModalTarget, setDownloadModalTarget] = useState(null);
+  const [downloadModalState, setDownloadModalState] = useState(null);
 
   // Form Setup
-  const { register, control, handleSubmit, watch, setValue, formState: { errors } } = useForm({
+  const { register, control, handleSubmit, watch, setValue, getValues, formState: { errors } } = useForm({
     defaultValues: {
       job_name: 'my-training-v1',
       model: { type: 'z-image', params: {} },
@@ -242,6 +296,8 @@ function Jobs() {
         setValue("selected_gpus", res.data.gpu.map(g => g.id.toString()));
       }
     });
+    // Fetch local models for auto-fill
+    apiClient.get('/models').then(res => setLocalModels(res.data || []));
   }, []);
 
   // Update Image Count when dataset changes
@@ -252,6 +308,25 @@ function Jobs() {
       });
     }
   }, [w_dataset]);
+
+  // AUTO-FILL Logic
+  useEffect(() => {
+    const template = MODEL_TEMPLATES[w_model_type];
+    if (template && template.fields) {
+      template.fields.forEach(field => {
+        const fieldPath = `model.params.${field.name}`;
+        // Seulement si le champ est vide, on essaye de le remplir
+        const currentValue = getValues(fieldPath);
+        if (!currentValue && field.default_repo) {
+          const safeName = field.default_repo.replace(/\//g, "_");
+          if (localModels.includes(safeName)) {
+            // Found locally!
+            setValue(fieldPath, `models/${safeName}`);
+          }
+        }
+      });
+    }
+  }, [w_model_type, localModels]);
 
   // --- CALCULATE STEPS ---
   const numGpus = w_gpus ? w_gpus.length : 1;
@@ -399,14 +474,14 @@ function Jobs() {
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <input
                     {...register(`model.params.${f.name}`, { required: f.required })}
-                    placeholder="/path/to/file or user/repo"
+                    placeholder={f.default_repo ? `e.g. ${f.default_repo}` : "/path/to/file"}
                     style={{ flex: 1 }}
                   />
                   <button
                     type="button"
                     className="btn-secondary"
-                    title="Download from HuggingFace"
-                    onClick={() => setDownloadModalTarget(`model.params.${f.name}`)}
+                    title={`Download ${f.default_repo || 'model'} from HuggingFace`}
+                    onClick={() => setDownloadModalState({ target: `model.params.${f.name}`, repo: f.default_repo || '' })}
                     style={{ padding: '0 10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                   >
                     <Cloud size={18} />
@@ -575,11 +650,12 @@ function Jobs() {
       </form>
 
       {/* Modal conditionnelle */}
-      {downloadModalTarget && (
+      {downloadModalState && (
         <DownloadModal
-          onClose={() => setDownloadModalTarget(null)}
+          initialRepo={downloadModalState.repo}
+          onClose={() => setDownloadModalState(null)}
           onSuccess={(path) => {
-            setValue(downloadModalTarget, path);
+            setValue(downloadModalState.target, path);
           }}
         />
       )}

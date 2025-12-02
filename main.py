@@ -12,6 +12,8 @@ import asyncio
 import psutil
 import shutil
 import subprocess
+import threading
+import time
 from typing import List, Optional
 from huggingface_hub import snapshot_download
 
@@ -71,8 +73,32 @@ download_state = {
     "status": "idle", # idle, downloading, completed, error
     "current_repo": None,
     "local_path": None,
+    "downloaded_size": "0 MB",
     "error": None
 }
+
+def get_folder_size_mb(path):
+    """Calcule la taille d'un dossier en MB."""
+    total_size = 0
+    try:
+        for dirpath, dirnames, filenames in os.walk(path):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                if not os.path.islink(fp):
+                    total_size += os.path.getsize(fp)
+    except Exception:
+        pass
+    return total_size / (1024 * 1024)
+
+def _monitor_download(target_dir, stop_event):
+    """Thread qui surveille la taille du dossier."""
+    while not stop_event.is_set():
+        size_mb = get_folder_size_mb(target_dir)
+        if size_mb > 1024:
+            download_state["downloaded_size"] = f"{size_mb/1024:.2f} GB"
+        else:
+            download_state["downloaded_size"] = f"{size_mb:.2f} MB"
+        time.sleep(1)
 
 def _background_download_model(req: DownloadRequest):
     global download_state
@@ -80,6 +106,10 @@ def _background_download_model(req: DownloadRequest):
     download_state["current_repo"] = req.repo_id
     download_state["error"] = None
     download_state["local_path"] = None
+    download_state["downloaded_size"] = "0 MB"
+    
+    # Event pour arrêter le monitoring
+    stop_monitor = threading.Event()
     
     try:
         # Dossier de destination : models/Createur_RepoName
@@ -87,6 +117,10 @@ def _background_download_model(req: DownloadRequest):
         target_dir = os.path.abspath(os.path.join("models", safe_name))
         
         print(f"[ModelManager] Starting download: {req.repo_id} -> {target_dir}")
+        
+        # Lancer le moniteur
+        monitor_thread = threading.Thread(target=_monitor_download, args=(target_dir, stop_monitor))
+        monitor_thread.start()
         
         local_path = snapshot_download(
             repo_id=req.repo_id,
@@ -104,6 +138,8 @@ def _background_download_model(req: DownloadRequest):
         download_state["status"] = "error"
         download_state["error"] = str(e)
         print(f"[ModelManager] Download failed: {e}")
+    finally:
+        stop_monitor.set()
 
 @app.post("/models/download")
 async def start_model_download(req: DownloadRequest, background_tasks: BackgroundTasks):
@@ -116,6 +152,13 @@ async def start_model_download(req: DownloadRequest, background_tasks: Backgroun
 @app.get("/models/status")
 async def get_download_status():
     return download_state
+
+@app.get("/models")
+async def list_local_models():
+    """Returns a list of folder names in the models/ directory."""
+    if not os.path.exists("models"):
+        return []
+    return [d for d in os.listdir("models") if os.path.isdir(os.path.join("models", d))]
 
 
 # --- General Routes ---

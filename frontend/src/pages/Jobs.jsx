@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import apiClient from '../api';
 import {
   Save, Play, Terminal, AlertCircle, CheckCircle2,
-  HelpCircle, Calculator, Info, Image as ImageIcon
+  HelpCircle, Calculator, Info, Image as ImageIcon,
+  Cloud, DownloadCloud, X
 } from 'lucide-react';
 
 // --- CONFIGURATION / CONSTANTES ---
@@ -25,7 +26,7 @@ const TOOLTIPS = {
   eval_every: "How often (in epochs) to generate the test images."
 };
 
-const RESOLUTIONS_OPTIONS = [512, 768, 1024];
+const RESOLUTIONS_OPTIONS = [512, 768, 1024, 1280];
 
 const MODEL_TEMPLATES = {
   'z-image': {
@@ -46,7 +47,7 @@ const MODEL_TEMPLATES = {
   }
 };
 
-// Composant Tooltip simple
+// Composant Tooltip
 const LabelWithTooltip = ({ label, tooltipKey }) => (
   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
     <label style={{ margin: 0, fontWeight: 500, color: '#ddd' }}>{label}</label>
@@ -59,6 +60,119 @@ const LabelWithTooltip = ({ label, tooltipKey }) => (
   </div>
 );
 
+// Composant Modal Download
+const DownloadModal = ({ onClose, onSuccess }) => {
+  const [repoId, setRepoId] = useState('');
+  const [hfToken, setHfToken] = useState('');
+  const [status, setStatus] = useState('idle'); // idle, downloading, success, error
+  const [error, setError] = useState(null);
+
+  // Polling du statut
+  useEffect(() => {
+    let interval;
+    if (status === 'downloading') {
+      interval = setInterval(async () => {
+        const res = await apiClient.get('/models/status');
+        const s = res.data;
+        if (s.status === 'completed') {
+          setStatus('success');
+          onSuccess(s.local_path);
+          clearInterval(interval);
+        } else if (s.status === 'error') {
+          setStatus('error');
+          setError(s.error);
+          clearInterval(interval);
+        }
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [status, onSuccess]);
+
+  const startDownload = async () => {
+    if (!repoId) return;
+    setStatus('downloading');
+    setError(null);
+    try {
+      await apiClient.post('/models/download', {
+        repo_id: repoId,
+        hf_token: hfToken
+      });
+    } catch (e) {
+      setStatus('error');
+      setError(e.response?.data?.detail || "Request failed");
+    }
+  };
+
+  return (
+    <div style={{
+      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+      background: 'rgba(0,0,0,0.8)', zIndex: 2000,
+      display: 'flex', justifyContent: 'center', alignItems: 'center'
+    }}>
+      <div className="card" style={{ width: '450px', padding: '2rem', border: '1px solid #444', position: 'relative' }}>
+        <button onClick={onClose} style={{ position: 'absolute', top: 10, right: 10, background: 'transparent', color: '#666' }}><X size={20} /></button>
+        <h3 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <DownloadCloud size={24} color="#646cff" /> Download from HuggingFace
+        </h3>
+
+        {status === 'success' ? (
+          <div className="result-box success">
+            <CheckCircle2 size={20} />
+            <div>
+              <strong>Download Complete!</strong>
+              <p style={{ fontSize: '0.8rem', margin: '5px 0' }}>Path auto-filled.</p>
+              <button onClick={onClose} className="btn-primary" style={{ marginTop: '1rem', width: '100%' }}>Close</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="form-group">
+              <label>Repository ID (e.g. <code>city96/HunyuanVideo-gguf</code>)</label>
+              <input
+                value={repoId}
+                onChange={e => setRepoId(e.target.value)}
+                placeholder="user/repo"
+                disabled={status === 'downloading'}
+              />
+            </div>
+            <div className="form-group">
+              <label>HF Token (Optional - for Gated models like Flux)</label>
+              <input
+                type="password"
+                value={hfToken}
+                onChange={e => setHfToken(e.target.value)}
+                placeholder="hf_..."
+                disabled={status === 'downloading'}
+              />
+            </div>
+
+            {status === 'downloading' && (
+              <div style={{ margin: '1rem 0', textAlign: 'center', color: '#646cff' }}>
+                <div className="spin" style={{ display: 'inline-block', marginBottom: '10px' }}>⏳</div>
+                <div>Downloading... Check server console for progress.</div>
+                <small style={{ color: '#666' }}>This runs in background. Do not close backend.</small>
+              </div>
+            )}
+
+            {error && (
+              <div className="result-box error" style={{ marginBottom: '1rem' }}>
+                <strong>Error:</strong> {error}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem' }}>
+              <button onClick={onClose} className="btn-secondary" disabled={status === 'downloading'}>Cancel</button>
+              <button onClick={startDownload} className="btn-primary" disabled={status === 'downloading' || !repoId} style={{ flex: 1 }}>
+                {status === 'downloading' ? 'Downloading...' : 'Start Download'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
+
 function Jobs() {
   const navigate = useNavigate();
   const [datasets, setDatasets] = useState([]);
@@ -69,6 +183,9 @@ function Jobs() {
   const [configPayload, setConfigPayload] = useState(null);
   const [status, setStatus] = useState('idle');
   const [errorMsg, setErrorMsg] = useState('');
+
+  // State pour la modal download
+  const [downloadModalTarget, setDownloadModalTarget] = useState(null);
 
   // Form Setup
   const { register, control, handleSubmit, watch, setValue, formState: { errors } } = useForm({
@@ -147,11 +264,9 @@ function Jobs() {
     setErrorMsg('');
 
     // Construct Output Path
-    // NOTE: This relies on backend having a default output root, we append the name
     const outputDir = `output/${data.job_name}`;
 
     // Construct Dataset Directories
-    // We only support 1 dataset selected from dropdown for now to simplify
     const directories = [{
       path: `data/${data.dataset_name}`, // Assuming data root structure
       num_repeats: parseInt(data.repeats)
@@ -164,7 +279,7 @@ function Jobs() {
       save_every_n_epochs: parseInt(data.save_every_n_epochs),
       micro_batch_size_per_gpu: parseInt(data.micro_batch_size_per_gpu),
       gradient_accumulation_steps: parseInt(data.gradient_accumulation_steps),
-      save_dtype: 'bfloat16', // Hardcoded default for now
+      save_dtype: 'bfloat16',
 
       model: {
         type: data.model.type,
@@ -185,15 +300,9 @@ function Jobs() {
 
       evaluation: {
         eval_every_n_epochs: parseInt(data.evaluation.every_n_epochs),
-        // We need to map prompts to eval_datasets structure required by diff-pipe
-        // This is a simplification. Usually eval_datasets points to a TOML.
-        // For now, we assume the backend might handle raw prompts or we skip this detail
-        // in the generation logic if backend doesn't support raw prompt list yet.
-        // Placeholder logic:
-        eval_datasets: []
+        eval_datasets: [] // Placeholder
       },
 
-      // Monitoring defaults
       monitoring: { enable_wandb: false },
       adapter: { enabled: false }
     };
@@ -204,7 +313,6 @@ function Jobs() {
       let cmd = response.data.command;
 
       // 2. Inject GPU selection into command
-      // e.g. "CUDA_VISIBLE_DEVICES=0,1 deepspeed --num_gpus=2 ..."
       if (data.selected_gpus.length > 0) {
         const gpuStr = data.selected_gpus.join(',');
         const numGpus = data.selected_gpus.length;
@@ -269,7 +377,7 @@ function Jobs() {
 
             <div className="form-group">
               <LabelWithTooltip label="Target Resolutions" tooltipKey="resolutions" />
-              <div style={{ display: 'flex', gap: '1rem' }}>
+              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
                 {RESOLUTIONS_OPTIONS.map(res => (
                   <label key={res} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', background: '#333', padding: '4px 8px', borderRadius: '4px' }}>
                     <input type="checkbox" value={res} {...register("dataset_resolutions")} />
@@ -284,11 +392,26 @@ function Jobs() {
         {/* 2. MODEL CONFIGURATION */}
         <div className="card">
           <h3 style={{ marginTop: 0, color: '#646cff' }}>3. Model Configuration</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '1rem' }}>
             {MODEL_TEMPLATES[w_model_type]?.fields.map(f => (
               <div key={f.name} className="form-group">
                 <LabelWithTooltip label={f.label} tooltipKey={`path_${f.name.split('_')[0]}`} />
-                <input {...register(`model.params.${f.name}`, { required: f.required })} placeholder="/path/to/file or user/repo" />
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    {...register(`model.params.${f.name}`, { required: f.required })}
+                    placeholder="/path/to/file or user/repo"
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    title="Download from HuggingFace"
+                    onClick={() => setDownloadModalTarget(`model.params.${f.name}`)}
+                    style={{ padding: '0 10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  >
+                    <Cloud size={18} />
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -450,6 +573,16 @@ function Jobs() {
         </div>
 
       </form>
+
+      {/* Modal conditionnelle */}
+      {downloadModalTarget && (
+        <DownloadModal
+          onClose={() => setDownloadModalTarget(null)}
+          onSuccess={(path) => {
+            setValue(downloadModalTarget, path);
+          }}
+        />
+      )}
 
       {/* Global Styles for Tooltips */}
       <style>{`

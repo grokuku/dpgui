@@ -13,8 +13,9 @@ import psutil
 import shutil
 import subprocess
 from typing import List, Optional
+from huggingface_hub import snapshot_download
 
-app = FastAPI(title="DPGui Backend", version="0.7.2")
+app = FastAPI(title="DPGui Backend", version="0.8.0")
 job_manager = JobManager()
 
 origins = ["http://localhost:5173", "http://127.0.0.1:5173", "*"]
@@ -28,7 +29,7 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
-# --- GPU Stats (unchanged) ---
+# --- GPU Stats ---
 def get_gpu_stats():
     if shutil.which("nvidia-smi") is None: return None
     try:
@@ -58,10 +59,69 @@ def get_gpu_stats():
         print(f"GPU Stats Error: {e}")
         return None
 
-# --- General Routes (unchanged) ---
+# --- MODEL DOWNLOAD MANAGER ---
+
+class DownloadRequest(BaseModel):
+    repo_id: str
+    filename: Optional[str] = None
+    hf_token: Optional[str] = None
+
+# Global state simple pour le suivi
+download_state = {
+    "status": "idle", # idle, downloading, completed, error
+    "current_repo": None,
+    "local_path": None,
+    "error": None
+}
+
+def _background_download_model(req: DownloadRequest):
+    global download_state
+    download_state["status"] = "downloading"
+    download_state["current_repo"] = req.repo_id
+    download_state["error"] = None
+    download_state["local_path"] = None
+    
+    try:
+        # Dossier de destination : models/Createur_RepoName
+        safe_name = req.repo_id.replace("/", "_")
+        target_dir = os.path.abspath(os.path.join("models", safe_name))
+        
+        print(f"[ModelManager] Starting download: {req.repo_id} -> {target_dir}")
+        
+        local_path = snapshot_download(
+            repo_id=req.repo_id,
+            local_dir=target_dir,
+            token=req.hf_token if req.hf_token else None,
+            allow_patterns=req.filename if req.filename else None,
+            # ignore_patterns=["*.msgpack", "*.bin"] 
+        )
+        
+        download_state["status"] = "completed"
+        download_state["local_path"] = local_path
+        print(f"[ModelManager] Download finished: {local_path}")
+        
+    except Exception as e:
+        download_state["status"] = "error"
+        download_state["error"] = str(e)
+        print(f"[ModelManager] Download failed: {e}")
+
+@app.post("/models/download")
+async def start_model_download(req: DownloadRequest, background_tasks: BackgroundTask):
+    if download_state["status"] == "downloading":
+        raise HTTPException(status_code=400, detail="A download is already in progress")
+    
+    background_tasks.add_task(_background_download_model, req)
+    return {"status": "started", "repo_id": req.repo_id}
+
+@app.get("/models/status")
+async def get_download_status():
+    return download_state
+
+
+# --- General Routes ---
 @app.get("/")
 async def read_root():
-    return {"status": "active", "service": "dpgui-backend", "version": "0.7.2", "active_job": job_manager.active_job_id}
+    return {"status": "active", "service": "dpgui-backend", "version": "0.8.0", "active_job": job_manager.active_job_id}
 
 @app.get("/system-stats")
 async def get_system_stats():
@@ -79,9 +139,7 @@ async def generate_config(config: TrainingConfig):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
-# ==========================================
 # --- DATASET MANAGEMENT API ---
-# ==========================================
 
 class DatasetAction(BaseModel):
     name: str
@@ -89,8 +147,8 @@ class DatasetAction(BaseModel):
 
 class BatchAction(BaseModel):
     dataset: str
-    images: List[str] # List of filenames
-    action: str # 'trigger_word', 'resize', 'autotag'
+    images: List[str] 
+    action: str 
     payload: Optional[str] = None 
 
 class DeleteImagesRequest(BaseModel):
@@ -98,7 +156,7 @@ class DeleteImagesRequest(BaseModel):
     images: List[str]
 
 class CaptionRequest(BaseModel):
-    image_path: str # relative path "dataset/img.jpg"
+    image_path: str 
     content: str
 
 @app.get("/datasets")
@@ -142,7 +200,6 @@ async def export_dataset(name: str):
     if not zip_path:
         raise HTTPException(status_code=404, detail="Dataset not found or failed to zip")
     
-    # Nettoyage automatique du fichier temporaire après l'envoi
     def cleanup():
         try: os.remove(zip_path)
         except: pass
@@ -155,7 +212,6 @@ async def get_dataset_images(name: str):
 
 @app.get("/datasets/thumbnail")
 async def get_thumbnail(path: str):
-    """Path is 'dataset_name/image.jpg'"""
     data = dataset_utils.get_thumbnail(path)
     if data:
         return Response(content=data, media_type="image/jpeg")
@@ -185,12 +241,10 @@ async def batch_operation(req: BatchAction):
         count = dataset_utils.batch_add_trigger(req.dataset, req.images, req.payload, position="start")
         return {"processed": count}
     elif req.action == "resize":
-        # Default to 1024 if not provided
         size = int(req.payload) if req.payload else 1024
         count = dataset_utils.batch_resize_images(req.dataset, req.images, resolution=size)
         return {"processed": count}
     elif req.action == "autotag":
-        # Placeholder for now
         return {"processed": 0, "message": "Auto-tagging requires external model (Coming in Phase 4.1)"}
     
     raise HTTPException(status_code=400, detail="Unknown action")
@@ -204,7 +258,7 @@ async def upload_images(name: str, files: List[UploadFile] = File(...)):
             count += 1
     return {"uploaded": count}
 
-# --- Job Routes (unchanged) ---
+# --- Job Routes ---
 @app.get("/jobs", response_model=List[Job])
 async def list_jobs(): return job_manager.list_jobs()
 

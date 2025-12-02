@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse
 from pydantic import BaseModel
@@ -106,7 +106,7 @@ def _background_download_model(req: DownloadRequest):
         print(f"[ModelManager] Download failed: {e}")
 
 @app.post("/models/download")
-async def start_model_download(req: DownloadRequest, background_tasks: BackgroundTask):
+async def start_model_download(req: DownloadRequest, background_tasks: BackgroundTasks):
     if download_state["status"] == "downloading":
         raise HTTPException(status_code=400, detail="A download is already in progress")
     

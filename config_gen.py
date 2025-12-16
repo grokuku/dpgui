@@ -1,6 +1,7 @@
 import toml
 import os
 import shlex
+import random # <--- AJOUT
 from schemas import TrainingConfig
 
 def resolve_project_path(path: str) -> str:
@@ -61,6 +62,7 @@ def generate_toml_files(config: TrainingConfig, base_path: str = "generated_conf
 
     main_data["model"] = model_params
     main_data["model"]["type"] = config.model.type
+    main_data["model"]["dtype"] = config.model.dtype
     
     if config.adapter.enabled:
         # FIX PYDANTIC V2
@@ -79,6 +81,8 @@ def generate_toml_files(config: TrainingConfig, base_path: str = "generated_conf
 
     # FIX PYDANTIC V2
     main_data.update(config.evaluation.model_dump())
+    
+    # Nettoyage global des None pour éviter les erreurs TOML
     main_data = {k: v for k, v in main_data.items() if v is not None}
 
     with open(main_toml_path, "w") as f:
@@ -90,5 +94,10 @@ def generate_deepspeed_command(main_config_path: str, num_gpus: int = 1) -> str:
     script_path = "train.py" 
     safe_config_path = shlex.quote(main_config_path)
     safe_script_path = shlex.quote(script_path)
-    cmd = f"deepspeed --num_gpus={num_gpus} {safe_script_path} --config {safe_config_path}"
+    
+    # --- AJOUT : Port aléatoire pour éviter les conflits "Zombie Process" ---
+    port = random.randint(30000, 50000)
+    # ------------------------------------------------------------------------
+    
+    cmd = f"deepspeed --num_gpus={num_gpus} --master_port={port} {safe_script_path} --config {safe_config_path}"
     return cmd

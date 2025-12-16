@@ -5,8 +5,8 @@ This document outlines a phased approach for developing the `diffusion-pipe-gui`
 ---
 
 ### **Phase 0: Project Setup & Automated Installation** [COMPLETED]
-*   [x] Backend Dependencies (`requirements.txt`).
-*   [x] Launcher Script (`scripts/launcher.sh`) with auto-install for Node/Python/Libs.
+*   [x] Backend Dependencies (`requirements.txt` - Updated for 2025 Stack).
+*   [x] Launcher Script (`scripts/launcher.sh`) with Auto-Healing & Active Version Check.
 
 ### **Phase 1: The Core Functional MVP (Web)** [COMPLETED]
 *   [x] Backend API (`/generate-config`).
@@ -15,7 +15,7 @@ This document outlines a phased approach for developing the `diffusion-pipe-gui`
 
 ### **Phase 2: Integrated Execution & Monitoring** [COMPLETED]
 *   [x] Process Manager (Async subprocess).
-*   [x] Real-time Log Streaming (WebSockets).
+*   [x] Real-time Log Streaming (WebSockets - Non-blocking fixed).
 *   [x] System Stats (GPU/CPU/RAM).
 
 ### **Phase 3: Queue Management** [COMPLETED]
@@ -25,25 +25,23 @@ This document outlines a phased approach for developing the `diffusion-pipe-gui`
 
 ### **Phase 4: The Dataset Manager** [COMPLETED]
 **Objective:** Build a comprehensive tool for dataset preparation through the web interface.
+*   [x] CRUD Operations & File Upload.
+*   [x] Batch Operations (Resize, Trigger Words).
+*   [x] Image/Caption Editor.
+*   [x] Image Grid & Thumbnails.
 
-1.  **Dataset API (FastAPI) & Utils:** [x]
-    *   CRUD Operations: Create, Rename, Delete, Clone Datasets.
-    *   File Operations: Upload (Multi-file), Export (ZIP), Delete Images.
-    *   Batch Operations: Resize Images, Add Trigger Words.
-    *   Image Processing: Thumbnail generation via `Pillow`.
-
-2.  **Frontend Dataset UI (React):** [x]
-    *   **Navigation:** Grid view with keyboard support (Arrows), "None" state handling.
-    *   **Editing:** Split-view (Grid + Editor Sidebar).
-    *   **Captioning:** Auto-save functionality, quick text editor.
-    *   **UX:** Drag'n'Drop uploads (Images + TXT), Fullscreen preview.
-
-### **Phase 5: Advanced Features & Refinement** [NEXT]
+### **Phase 5: Advanced Features & Refinement** [IN PROGRESS - BLOCKED]
 **Objective:** Polish the experience and add intelligence.
 
-1.  **Auto-Tagging:**
-    *   Integrate a local Vision-LLM or Tagger (e.g., WD14 or JoyCaption) to auto-fill `.txt` files.
-2.  **Model Management:**
-    *   UI to manage/download base models (checkpoints, VAEs).
+1.  **Job Execution Reliability:** [BLOCKED]
+    *   **Status**: Environment is healthy (Torch 2.9.1 / CUDA 12.8).
+    *   **Blocker**: `DistNetworkError` (Address already in use). The system ignores the dynamic port assignment and collides with zombie processes from previous crashes.
+    *   **Actions Taken**: Implemented Auto-Patching for Python 3.11 compatibility, Symlink repairs, and Environment Variable injection.
+
+2.  **Model Management:** [PARTIAL]
+    *   [x] Basic Local Model Scanning.
+    *   [x] HuggingFace Downloader (Added support for single file download).
+    *   [ ] Fix SDXL Configuration path logic (Repo ID vs File Path).
+
 3.  **Training Visualization:**
     *   Embed TensorBoard or specialized graphs for Loss/Learning Rate.

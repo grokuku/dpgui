@@ -13,6 +13,7 @@ import {
 const TOOLTIPS = {
   job_name: "The unique name for this training run. A folder with this name will be created in the Output Directory.",
   model_type: "The base architecture to train. 'Z-Image' is currently recommended.",
+  model_dtype: "Precision for the model weights. bfloat16 is recommended for Ampere+ GPUs.",
   path_transformer: "Path to the model file (.safetensors) or HuggingFace Repo ID (e.g., 'user/repo').",
   path_vae: "Path to the VAE folder/file. Leave empty if included in the transformer.",
   epochs: "Number of times the model will see the entire dataset.",
@@ -48,7 +49,7 @@ const MODEL_TEMPLATES = {
   'flux': {
     label: 'Flux.1',
     fields: [
-      { name: 'transformer_path', label: 'Transformer Path', required: true, default_repo: "black-forest-labs/FLUX.1-dev" },
+      { name: 'transformer_path', label: 'Transformer Path', required: true, default_repo: "black-forest-labs/FLUX.1-dev", default_filename: "flux1-dev.safetensors" },
       { name: 't5_path', label: 'T5 Encoder Path', required: true, default_repo: "city96/t5-v1_1-xxl-encoder-bf16" },
       { name: 'clip_path', label: 'CLIP Path', required: true, default_repo: "openai/clip-vit-large-patch14" }
     ]
@@ -64,8 +65,8 @@ const MODEL_TEMPLATES = {
   'sdxl': {
     label: 'SDXL',
     fields: [
-      { name: 'checkpoint_path', label: 'Checkpoint Path', required: true, default_repo: "stabilityai/stable-diffusion-xl-base-1.0" },
-      { name: 'vae_path', label: 'VAE', required: false, default_repo: "madebyollin/sdxl-vae-fp16-fix" }
+      { name: 'checkpoint_path', label: 'Checkpoint File (.safetensors)', required: true, default_repo: "stabilityai/stable-diffusion-xl-base-1.0", default_filename: "sd_xl_base_1.0.safetensors" },
+      { name: 'vae_path', label: 'VAE', required: false, default_repo: "madebyollin/sdxl-vae-fp16-fix", default_filename: "sdxl_vae.safetensors" }
     ]
   },
   'wan': {
@@ -96,7 +97,6 @@ const MODEL_TEMPLATES = {
   }
 };
 
-// Composant Tooltip
 const LabelWithTooltip = ({ label, tooltipKey }) => (
   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
     <label style={{ margin: 0, fontWeight: 500, color: '#ddd' }}>{label}</label>
@@ -109,9 +109,10 @@ const LabelWithTooltip = ({ label, tooltipKey }) => (
   </div>
 );
 
-// Composant Modal Download
-const DownloadModal = ({ onClose, onSuccess, initialRepo = '' }) => {
+// Composant Modal Download Modifié pour supporter 'filename'
+const DownloadModal = ({ onClose, onSuccess, initialRepo = '', initialFilename = '' }) => {
   const [repoId, setRepoId] = useState(initialRepo);
+  const [filename, setFilename] = useState(initialFilename);
   const [hfToken, setHfToken] = useState('');
   const [status, setStatus] = useState('idle'); // idle, downloading, success, error
   const [downloadedSize, setDownloadedSize] = useState('0 MB');
@@ -126,7 +127,14 @@ const DownloadModal = ({ onClose, onSuccess, initialRepo = '' }) => {
         const s = res.data;
         if (s.status === 'completed') {
           setStatus('success');
-          onSuccess(s.local_path);
+          // Si on a téléchargé un fichier spécifique, on construit le chemin complet
+          let finalPath = s.local_path;
+          if (filename && !finalPath.endsWith(filename)) {
+             // Basic construction assuming simple folder structure from snapshot_download with allow_patterns
+             // Note: snapshot_download returns the folder path usually
+             finalPath = `${s.local_path}/${filename}`;
+          }
+          onSuccess(finalPath);
           clearInterval(interval);
         } else if (s.status === 'error') {
           setStatus('error');
@@ -139,7 +147,7 @@ const DownloadModal = ({ onClose, onSuccess, initialRepo = '' }) => {
       }, 1000);
     }
     return () => clearInterval(interval);
-  }, [status, onSuccess]);
+  }, [status, onSuccess, filename]);
 
   const startDownload = async () => {
     if (!repoId) return;
@@ -148,6 +156,7 @@ const DownloadModal = ({ onClose, onSuccess, initialRepo = '' }) => {
     try {
       await apiClient.post('/models/download', {
         repo_id: repoId,
+        filename: filename || null, // Pass filename if present
         hf_token: hfToken
       });
     } catch (e) {
@@ -180,7 +189,7 @@ const DownloadModal = ({ onClose, onSuccess, initialRepo = '' }) => {
         ) : (
           <>
             <div className="form-group">
-              <label>Repository ID (e.g. <code>city96/HunyuanVideo-gguf</code>)</label>
+              <label>Repository ID</label>
               <input
                 value={repoId}
                 onChange={e => setRepoId(e.target.value)}
@@ -189,7 +198,16 @@ const DownloadModal = ({ onClose, onSuccess, initialRepo = '' }) => {
               />
             </div>
             <div className="form-group">
-              <label>HF Token (Optional - for Gated models like Flux)</label>
+              <label>Filename (Optional - for single file)</label>
+              <input
+                value={filename}
+                onChange={e => setFilename(e.target.value)}
+                placeholder="model.safetensors"
+                disabled={status === 'downloading'}
+              />
+            </div>
+            <div className="form-group">
+              <label>HF Token (Optional)</label>
               <input
                 type="password"
                 value={hfToken}
@@ -238,14 +256,14 @@ function Jobs() {
   const [status, setStatus] = useState('idle');
   const [errorMsg, setErrorMsg] = useState('');
 
-  // State pour la modal download
+  // State pour la modal download { target, repo, filename }
   const [downloadModalState, setDownloadModalState] = useState(null);
 
   // Form Setup
   const { register, control, handleSubmit, watch, setValue, getValues, formState: { errors } } = useForm({
     defaultValues: {
       job_name: 'my-training-v1',
-      model: { type: 'z-image', params: {} },
+      model: { type: 'z-image', dtype: 'bfloat16', params: {} }, 
 
       // Dataset
       dataset_name: '',
@@ -358,6 +376,7 @@ function Jobs() {
 
       model: {
         type: data.model.type,
+        dtype: data.model.dtype, 
         params: data.model.params
       },
 
@@ -431,12 +450,25 @@ function Jobs() {
               <LabelWithTooltip label="Job Name (Output Folder)" tooltipKey="job_name" />
               <input {...register("job_name", { required: true })} style={{ fontWeight: 'bold' }} placeholder="my-lora-v1" />
             </div>
-            <div className="form-group">
-              <LabelWithTooltip label="Model Architecture" tooltipKey="model_type" />
-              <select {...register("model.type")}>
-                {Object.entries(MODEL_TEMPLATES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-              </select>
+            
+            {/* ROW: Model Architecture & Dtype */}
+            <div style={{ display: 'flex', gap: '1rem' }}>
+                <div className="form-group" style={{ flex: 2 }}>
+                <LabelWithTooltip label="Model Architecture" tooltipKey="model_type" />
+                <select {...register("model.type")}>
+                    {Object.entries(MODEL_TEMPLATES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+                </div>
+                <div className="form-group" style={{ flex: 1 }}>
+                    <LabelWithTooltip label="Precision" tooltipKey="model_dtype" />
+                    <select {...register("model.dtype")}>
+                        <option value="bfloat16">bfloat16</option>
+                        <option value="float16">float16</option>
+                        <option value="float32">float32</option>
+                    </select>
+                </div>
             </div>
+
           </div>
 
           {/* Right: Dataset */}
@@ -480,8 +512,12 @@ function Jobs() {
                   <button
                     type="button"
                     className="btn-secondary"
-                    title={`Download ${f.default_repo || 'model'} from HuggingFace`}
-                    onClick={() => setDownloadModalState({ target: `model.params.${f.name}`, repo: f.default_repo || '' })}
+                    title={`Download ${f.default_repo || 'model'}`}
+                    onClick={() => setDownloadModalState({ 
+                        target: `model.params.${f.name}`, 
+                        repo: f.default_repo || '',
+                        filename: f.default_filename || '' // Pass default filename if available
+                    })}
                     style={{ padding: '0 10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                   >
                     <Cloud size={18} />
@@ -653,6 +689,7 @@ function Jobs() {
       {downloadModalState && (
         <DownloadModal
           initialRepo={downloadModalState.repo}
+          initialFilename={downloadModalState.filename} // Ajout
           onClose={() => setDownloadModalState(null)}
           onSuccess={(path) => {
             setValue(downloadModalState.target, path);

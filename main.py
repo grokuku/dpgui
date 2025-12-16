@@ -332,14 +332,17 @@ async def get_job_logs(job_id: str):
 async def websocket_logs(websocket: WebSocket):
     await websocket.accept()
     try:
-        generator = await job_manager.get_log_stream()
-        if not generator:
-             while True:
-                await asyncio.sleep(1)
-                try: await websocket.send_text("PING") 
-                except: break
-        else:
-            async for line in generator:
-                await websocket.send_text(line)
-            await websocket.close()
-    except: pass
+        # On enregistre le socket auprès du ProcessManager qui lui poussera les logs
+        await job_manager.process_manager.register_websocket(websocket)
+        
+        # On garde la connexion ouverte pour recevoir le flux
+        while True:
+            # On attend juste un message pour garder la connexion vivante ou détecter la fermeture
+            data = await websocket.receive_text()
+            if data == "PING":
+                pass
+    except WebSocketDisconnect:
+        job_manager.process_manager._websockets.discard(websocket)
+    except Exception as e:
+        print(f"WebSocket Error: {e}")
+        job_manager.process_manager._websockets.discard(websocket)

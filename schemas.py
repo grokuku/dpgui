@@ -52,6 +52,7 @@ class DatasetConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     type: str
+    dtype: str = "bfloat16"
     params: Dict[str, Any] = {} 
 
 class AdapterConfig(BaseModel):
@@ -86,6 +87,13 @@ class TrainingConfig(BaseModel):
     output_dir: str
     epochs: int = 1000
     max_steps: Optional[int] = 5000
+    
+    save_every_n_epochs: Optional[int] = 1
+    save_every_n_steps: Optional[int] = None
+    save_every_n_examples: Optional[int] = None
+    checkpoint_every_n_epochs: Optional[int] = None
+    checkpoint_every_n_minutes: Optional[int] = None
+
     micro_batch_size_per_gpu: Union[int, List[List[int]]] = 1
     pipeline_stages: int = 1
     gradient_accumulation_steps: int = 1

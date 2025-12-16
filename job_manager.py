@@ -4,6 +4,7 @@ import os
 import time
 import uuid
 import glob
+import re # <--- AJOUT IMPORTANT
 from typing import List, Optional, Dict
 from schemas import Job, JobStatus, TrainingConfig
 from process_manager import ProcessManager
@@ -30,7 +31,6 @@ class JobManager:
                 with open(filepath, "r") as f:
                     data = json.load(f)
                     job = Job(**data)
-                    self.jobs[job.id] = job
                     # Si crash pendant run, on marque comme Failed
                     if job.status == JobStatus.RUNNING:
                         job.status = JobStatus.FAILED
@@ -50,7 +50,7 @@ class JobManager:
             id=job_id,
             config=config,
             command=command,
-            status=JobStatus.STOPPED, # PAR DEFAUT : Dans le Pool (pas la queue)
+            status=JobStatus.STOPPED, 
             log_path=os.path.join(LOGS_DIR, f"{job_id}.log")
         )
         self.jobs[job_id] = job
@@ -65,7 +65,7 @@ class JobManager:
         job = self.jobs.get(job_id)
         if job and job.status in [JobStatus.STOPPED, JobStatus.FAILED, JobStatus.COMPLETED]:
             job.status = JobStatus.PENDING
-            job.error = None # Reset error on retry
+            job.error = None 
             self._save_job(job)
 
     async def stop_job(self, job_id: str):
@@ -76,7 +76,6 @@ class JobManager:
         
         if job.status == JobStatus.RUNNING and self.process_manager.is_running:
             await self.process_manager.stop()
-            # Le worker mettra à jour le statut
         elif job.status == JobStatus.PENDING:
             job.status = JobStatus.STOPPED
             self._save_job(job)
@@ -100,6 +99,64 @@ class JobManager:
                 return f.read()
         except Exception as e:
             return f"Error reading log file: {e}"
+
+    def _fix_vendor_symlinks(self):
+        """
+        Répare ou crée les liens symboliques pour ComfyUI et HunyuanVideo dans vendor/libs.
+        Cela permet d'importer 'comfy' et 'hyvideo' sans importer les dossiers conflictuels.
+        """
+        libs_dir = os.path.abspath("vendor/libs")
+        if not os.path.exists(libs_dir):
+            os.makedirs(libs_dir)
+
+        # Liste des liens à créer : (nom_lien, chemin_source)
+        links_config = [
+            ("comfy", os.path.abspath("vendor/ComfyUI/comfy")),
+            ("hyvideo", os.path.abspath("vendor/HunyuanVideo/hyvideo")),
+            ("node_helpers.py", os.path.abspath("vendor/ComfyUI/node_helpers.py"))
+        ]
+
+        for link_name, source_path in links_config:
+            link_path = os.path.join(libs_dir, link_name)
+            
+            # 1. Vérification et Nettoyage si nécessaire
+            if os.path.lexists(link_path):
+                try:
+                    if not os.path.exists(link_path) or os.path.realpath(link_path) != source_path:
+                        os.remove(link_path)
+                    else:
+                        continue 
+                except OSError:
+                    pass 
+            
+            # 2. Création
+            if os.path.exists(source_path):
+                try:
+                    os.symlink(source_path, link_path)
+                    print(f"[JobManager] Symlink created: {link_path} -> {source_path}")
+                except Exception as e:
+                    print(f"[JobManager] Failed to create symlink for {link_name}: {e}")
+
+    def _patch_compatibility(self):
+        """
+        Applique des correctifs à la volée sur le code de diffusion-pipe
+        pour assurer la compatibilité avec Python 3.11.
+        """
+        # Patch pour utils/cache.py : sqlite3 autocommit (Python 3.12+)
+        cache_file = os.path.abspath("vendor/diffusion-pipe/utils/cache.py")
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # On cherche l'argument incompatible avec Python 3.11
+                if ", autocommit=False" in content:
+                    print("[JobManager] Patching utils/cache.py for Python 3.11 compatibility...")
+                    new_content = content.replace(", autocommit=False", "")
+                    with open(cache_file, 'w', encoding='utf-8') as f:
+                        f.write(new_content)
+            except Exception as e:
+                print(f"[JobManager] Warning: Failed to patch cache.py: {e}")
 
     async def _worker_loop(self):
         print("[JobManager] Worker loop started.")
@@ -133,25 +190,44 @@ class JobManager:
                 self._save_job(next_job)
                 self.active_job_id = next_job.id
                 
-                # S'assurer que le dossier logs existe
                 os.makedirs(os.path.dirname(next_job.log_path), exist_ok=True)
-                
-                # On redirige stdout/stderr vers le fichier log
-                # Pour le live stream, le ProcessManager devra lire ce fichier (TODO future improvement)
-                # Pour l'instant on garde le ProcessManager tel quel (pipe) et on écrit manuellement dans le fichier ?
-                # NON : ProcessManager capture stdout. On va écrire ce stdout dans le fichier à la volée.
-                # Pour simplifier cette phase, on laisse ProcessManager gérer le flux live, 
-                # et on ne peut pas vraiment écrire dans le fichier facilement sans modifier ProcessManager.
-                # FIX RAPIDE: On va modifier ProcessManager pour supporter le 'tee' (écriture fichier) ?
-                # Trop risqué pour maintenant. 
-                # ALTERNATIVE : On redirige la sortie de la commande shell vers un fichier ET stdout.
-                
-                cmd_with_log = f"{next_job.command} 2>&1 | tee {next_job.log_path}"
                 
                 try:
                     work_dir = os.path.abspath("vendor/diffusion-pipe")
-                    await self.process_manager.start(cmd_with_log, cwd=work_dir)
+                    
+                    # --- REPARATION ENVIRONNEMENT & CODE ---
+                    self._fix_vendor_symlinks()
+                    self._patch_compatibility()
+                    
+                    # --- CONFIGURATION ENVIRONNEMENT ---
+                    libs_path = os.path.abspath("vendor/libs")
+                    
+                    env_updates = {}
+                    current_pythonpath = os.environ.get("PYTHONPATH", "")
+                    
+                    new_pythonpath = f"{libs_path}{os.pathsep}{current_pythonpath}"
+                    env_updates["PYTHONPATH"] = new_pythonpath
+
+                    # --- FIX CRITIQUE: FORCAGE DU PORT ---
+                    # On extrait le port de la commande (--master_port=XXXX)
+                    # et on l'injecte explicitement dans les variables d'environnement.
+                    port_match = re.search(r"--master_port=(\d+)", next_job.command)
+                    if port_match:
+                        port = port_match.group(1)
+                        env_updates["MASTER_PORT"] = port
+                        env_updates["MASTER_ADDR"] = "127.0.0.1"
+                        print(f"[JobManager] Forcing MASTER_PORT={port} in environment to bypass zombies.")
+                    # -------------------------------------
+                    
+                    # --- LANCEMENT ---
+                    await self.process_manager.start(
+                        command=next_job.command, 
+                        log_file_path=next_job.log_path,
+                        cwd=work_dir,
+                        env=env_updates
+                    )
                 except Exception as e:
+                    print(f"FAILED TO START JOB: {e}")
                     next_job.status = JobStatus.FAILED
                     next_job.error = str(e)
                     self._save_job(next_job)
@@ -160,4 +236,4 @@ class JobManager:
             await asyncio.sleep(2)
 
     async def get_log_stream(self):
-        return self.process_manager.get_output_generator()
+        return None

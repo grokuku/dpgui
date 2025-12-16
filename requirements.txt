@@ -6,3 +6,51 @@ psutil
 Pillow
 huggingface_hub
 pydantic>=2.4.2
+
+# --- CORE DATA & NETWORK ---
+# Numpy < 2.0 est critique pour la compatibilité binaire DeepSpeed/Torch
+numpy<2.0
+pandas
+pyarrow
+aiohttp
+# Fix conflit version datasets
+fsspec==2025.10.0
+
+# --- DEPENDENCIES MANQUANTES (Fixes) ---
+dill
+multiprocess
+xxhash
+greenlet
+portalocker
+trampoline
+
+# --- FIX CONFLIT VERSION (Hydra/OmegaConf) ---
+# Hydra et OmegaConf demandent strictement la 4.9.x
+antlr4-python3-runtime==4.9.3
+
+# --- UTILS ---
+gitpython
+wcwidth
+mako
+absl-py
+grpcio
+markdown
+werkzeug
+protobuf
+six
+hjson
+msgpack
+ninja
+py-cpuinfo
+platformdirs
+
+# --- ML STACK (2025 Compatible) ---
+# PyTorch 2.9.1 est géré par le launcher.sh
+accelerate>=1.0.0
+transformers>=4.48.0
+diffusers>=0.32.0
+peft>=0.14.0
+bitsandbytes>=0.45.0
+tensorboard
+wandb
+kornia

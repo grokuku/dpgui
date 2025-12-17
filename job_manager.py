@@ -4,7 +4,8 @@ import os
 import time
 import uuid
 import glob
-import re # <--- AJOUT IMPORTANT
+import re
+import socket
 from typing import List, Optional, Dict
 from schemas import Job, JobStatus, TrainingConfig
 from process_manager import ProcessManager
@@ -139,10 +140,10 @@ class JobManager:
 
     def _patch_compatibility(self):
         """
-        Applique des correctifs à la volée sur le code de diffusion-pipe
-        pour assurer la compatibilité avec Python 3.11.
+        Applique des correctifs à la volée pour Python 3.11+.
         """
         # Patch pour utils/cache.py : sqlite3 autocommit (Python 3.12+)
+        # Ce patch est conservé car indispensable et sans effet de bord sur ZeRO
         cache_file = os.path.abspath("vendor/diffusion-pipe/utils/cache.py")
         if os.path.exists(cache_file):
             try:
@@ -157,6 +158,26 @@ class JobManager:
                         f.write(new_content)
             except Exception as e:
                 print(f"[JobManager] Warning: Failed to patch cache.py: {e}")
+        
+        # NOTE: Le patch de train.py pour ZeRO a été SUPPRIMÉ ici.
+        # On utilise désormais le fichier train.py propre (native pipeline parallelism).
+
+    # --- PORT DIAGNOSTIC TOOLS ---
+    def _is_port_free(self, port: int) -> bool:
+        """Checks if a port is free by trying to bind to it."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("", port))
+                return True
+        except OSError:
+            return False
+
+    def _get_free_port(self) -> int:
+        """Asks the OS for a free ephemeral port."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return s.getsockname()[1]
+    # -----------------------------
 
     async def _worker_loop(self):
         print("[JobManager] Worker loop started.")
@@ -197,7 +218,7 @@ class JobManager:
                     
                     # --- REPARATION ENVIRONNEMENT & CODE ---
                     self._fix_vendor_symlinks()
-                    self._patch_compatibility()
+                    self._patch_compatibility() 
                     
                     # --- CONFIGURATION ENVIRONNEMENT ---
                     libs_path = os.path.abspath("vendor/libs")
@@ -208,15 +229,31 @@ class JobManager:
                     new_pythonpath = f"{libs_path}{os.pathsep}{current_pythonpath}"
                     env_updates["PYTHONPATH"] = new_pythonpath
 
-                    # --- FIX CRITIQUE: FORCAGE DU PORT ---
-                    # On extrait le port de la commande (--master_port=XXXX)
-                    # et on l'injecte explicitement dans les variables d'environnement.
+                    # --- PORT MANAGEMENT ---
+                    # 1. Extract intended port
                     port_match = re.search(r"--master_port=(\d+)", next_job.command)
-                    if port_match:
-                        port = port_match.group(1)
-                        env_updates["MASTER_PORT"] = port
-                        env_updates["MASTER_ADDR"] = "127.0.0.1"
-                        print(f"[JobManager] Forcing MASTER_PORT={port} in environment to bypass zombies.")
+                    target_port = int(port_match.group(1)) if port_match else 29500
+                    
+                    # 2. Check availability
+                    is_free = self._is_port_free(target_port)
+                    print(f"[JobManager] Diagnostic: Port {target_port} is {'FREE' if is_free else 'OCCUPIED'}.")
+                    
+                    # 3. Resolve conflict
+                    final_port = target_port
+                    if not is_free:
+                        print(f"[JobManager] Port {target_port} is busy. Finding a new one...")
+                        final_port = self._get_free_port()
+                        # Update command string to match new port
+                        if port_match:
+                            next_job.command = next_job.command.replace(f"--master_port={target_port}", f"--master_port={final_port}")
+                        else:
+                            # Insert if missing (unlikely given config_gen, but safe)
+                            next_job.command += f" --master_port={final_port}"
+                        print(f"[JobManager] Switched to port {final_port}.")
+                    
+                    # 4. Enforce Env Vars
+                    env_updates["MASTER_PORT"] = str(final_port)
+                    env_updates["MASTER_ADDR"] = "127.0.0.1"
                     # -------------------------------------
                     
                     # --- LANCEMENT ---

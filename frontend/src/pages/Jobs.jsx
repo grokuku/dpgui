@@ -130,9 +130,9 @@ const DownloadModal = ({ onClose, onSuccess, initialRepo = '', initialFilename =
           // Si on a téléchargé un fichier spécifique, on construit le chemin complet
           let finalPath = s.local_path;
           if (filename && !finalPath.endsWith(filename)) {
-             // Basic construction assuming simple folder structure from snapshot_download with allow_patterns
-             // Note: snapshot_download returns the folder path usually
-             finalPath = `${s.local_path}/${filename}`;
+            // Basic construction assuming simple folder structure from snapshot_download with allow_patterns
+            // Note: snapshot_download returns the folder path usually
+            finalPath = `${s.local_path}/${filename}`;
           }
           onSuccess(finalPath);
           clearInterval(interval);
@@ -263,7 +263,7 @@ function Jobs() {
   const { register, control, handleSubmit, watch, setValue, getValues, formState: { errors } } = useForm({
     defaultValues: {
       job_name: 'my-training-v1',
-      model: { type: 'z-image', dtype: 'bfloat16', params: {} }, 
+      model: { type: 'z-image', dtype: 'bfloat16', params: {} },
 
       // Dataset
       dataset_name: '',
@@ -365,6 +365,12 @@ function Jobs() {
       num_repeats: parseInt(data.repeats)
     }];
 
+    // Determine Pipeline Stages (Model Splitting)
+    // If multiple GPUs are selected, we split the model across them.
+    const selectedGpuCount = data.selected_gpus.length || 1;
+    // Default strategy: 1 stage per GPU (Pipeline Parallelism)
+    const pipelineStages = selectedGpuCount;
+
     // Construct Config Payload
     const payload = {
       output_dir: outputDir,
@@ -372,11 +378,12 @@ function Jobs() {
       save_every_n_epochs: parseInt(data.save_every_n_epochs),
       micro_batch_size_per_gpu: parseInt(data.micro_batch_size_per_gpu),
       gradient_accumulation_steps: parseInt(data.gradient_accumulation_steps),
+      pipeline_stages: pipelineStages, // <--- AJOUT CRUCIAL POUR LE SPLITTING
       save_dtype: 'bfloat16',
 
       model: {
         type: data.model.type,
-        dtype: data.model.dtype, 
+        dtype: data.model.dtype,
         params: data.model.params
       },
 
@@ -450,23 +457,23 @@ function Jobs() {
               <LabelWithTooltip label="Job Name (Output Folder)" tooltipKey="job_name" />
               <input {...register("job_name", { required: true })} style={{ fontWeight: 'bold' }} placeholder="my-lora-v1" />
             </div>
-            
+
             {/* ROW: Model Architecture & Dtype */}
             <div style={{ display: 'flex', gap: '1rem' }}>
-                <div className="form-group" style={{ flex: 2 }}>
+              <div className="form-group" style={{ flex: 2 }}>
                 <LabelWithTooltip label="Model Architecture" tooltipKey="model_type" />
                 <select {...register("model.type")}>
-                    {Object.entries(MODEL_TEMPLATES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                  {Object.entries(MODEL_TEMPLATES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                 </select>
-                </div>
-                <div className="form-group" style={{ flex: 1 }}>
-                    <LabelWithTooltip label="Precision" tooltipKey="model_dtype" />
-                    <select {...register("model.dtype")}>
-                        <option value="bfloat16">bfloat16</option>
-                        <option value="float16">float16</option>
-                        <option value="float32">float32</option>
-                    </select>
-                </div>
+              </div>
+              <div className="form-group" style={{ flex: 1 }}>
+                <LabelWithTooltip label="Precision" tooltipKey="model_dtype" />
+                <select {...register("model.dtype")}>
+                  <option value="bfloat16">bfloat16</option>
+                  <option value="float16">float16</option>
+                  <option value="float32">float32</option>
+                </select>
+              </div>
             </div>
 
           </div>
@@ -513,10 +520,10 @@ function Jobs() {
                     type="button"
                     className="btn-secondary"
                     title={`Download ${f.default_repo || 'model'}`}
-                    onClick={() => setDownloadModalState({ 
-                        target: `model.params.${f.name}`, 
-                        repo: f.default_repo || '',
-                        filename: f.default_filename || '' // Pass default filename if available
+                    onClick={() => setDownloadModalState({
+                      target: `model.params.${f.name}`,
+                      repo: f.default_repo || '',
+                      filename: f.default_filename || '' // Pass default filename if available
                     })}
                     style={{ padding: '0 10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                   >
@@ -611,6 +618,12 @@ function Jobs() {
                         <span>GPU {gpu.id} ({gpu.vram_total / 1024 | 0}GB)</span>
                       </label>
                     ))}
+                  </div>
+                )}
+                {/* Visual indicator for splitting */}
+                {w_gpus && w_gpus.length > 1 && (
+                  <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: '#3498db' }}>
+                    <Info size={12} style={{ verticalAlign: 'middle' }} /> Model Splitting Active ({w_gpus.length} stages)
                   </div>
                 )}
               </div>

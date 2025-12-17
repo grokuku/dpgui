@@ -24,7 +24,6 @@ This document outlines a phased approach for developing the `diffusion-pipe-gui`
 *   [x] Dashboard UI (Active Queue vs Job Pool).
 
 ### **Phase 4: The Dataset Manager** [COMPLETED]
-**Objective:** Build a comprehensive tool for dataset preparation through the web interface.
 *   [x] CRUD Operations & File Upload.
 *   [x] Batch Operations (Resize, Trigger Words).
 *   [x] Image/Caption Editor.
@@ -33,15 +32,16 @@ This document outlines a phased approach for developing the `diffusion-pipe-gui`
 ### **Phase 5: Advanced Features & Refinement** [IN PROGRESS - BLOCKED]
 **Objective:** Polish the experience and add intelligence.
 
-1.  **Job Execution Reliability:** [BLOCKED]
-    *   **Status**: Environment is healthy (Torch 2.9.1 / CUDA 12.8).
-    *   **Blocker**: `DistNetworkError` (Address already in use). The system ignores the dynamic port assignment and collides with zombie processes from previous crashes.
-    *   **Actions Taken**: Implemented Auto-Patching for Python 3.11 compatibility, Symlink repairs, and Environment Variable injection.
+1.  **Job Execution Reliability:** [IN PROGRESS]
+    *   [x] **Zombie Ports**: Fixed via dynamic port reallocation.
+    *   [x] **Config Ignored**: Fixed via Hot-Patching `train.py`.
+    *   [ ] **Optimizer Compatibility**: Currently debugging `AssertionError: zero stage 2 requires an optimizer`.
+    *   [ ] **Action**: Downgrade to ZeRO-1 or Refactor Optimizer init.
 
 2.  **Model Management:** [PARTIAL]
     *   [x] Basic Local Model Scanning.
-    *   [x] HuggingFace Downloader (Added support for single file download).
-    *   [ ] Fix SDXL Configuration path logic (Repo ID vs File Path).
+    *   [x] HuggingFace Downloader.
+    *   [ ] Fix SDXL Configuration path logic (Repo ID vs File Path) - *Workaround applied*.
 
 3.  **Training Visualization:**
     *   Embed TensorBoard or specialized graphs for Loss/Learning Rate.

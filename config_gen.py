@@ -73,17 +73,28 @@ def generate_toml_files(config: TrainingConfig, base_path: str = "generated_conf
         main_data["monitoring"] = config.monitoring.model_dump(exclude={"enable_wandb"})
         main_data["monitoring"] = {k: v for k, v in main_data["monitoring"].items() if v is not None}
 
-    main_data.update(config.evaluation.model_dump())
-
     # --- OPTIMISATION VRAM AUTOMATIQUE ---
     
-    # 1. Force Gradient Checkpointing (Toujours utile et compatible)
+    # 1. Force Gradient Checkpointing
     main_data["gradient_checkpointing"] = True
     
-    # 2. ZeRO Optimization REMOVED
-    # Nous utilisons le Pipeline Parallelism natif de diffusion-pipe.
-    # ZeRO cause des conflits d'initialisation dans train.py.
-    # La répartition de la charge se fera via 'pipeline_stages' si > 1.
+    # 2. ZeRO Optimization (STRATEGIC PIVOT: ENABLED)
+    main_data["zero_optimization"] = {
+        "stage": 2,
+        "offload_optimizer": {
+            "device": "cpu",
+            "pin_memory": True
+        },
+        "allgather_partitions": True,
+        "allgather_bucket_size": 2e8,
+        "reduce_scatter": True,
+        "reduce_bucket_size": 2e8,
+        "overlap_comm": True,
+        "contiguous_gradients": True,
+        # --- AJOUT CRITIQUE POUR FIXER L'ERREUR ---
+        "zero_force_ds_cpu_optimizer": False 
+        # ------------------------------------------
+    }
     
     # --------------------------------------------------
     
@@ -96,13 +107,9 @@ def generate_toml_files(config: TrainingConfig, base_path: str = "generated_conf
     return os.path.abspath(main_toml_path)
 
 def generate_deepspeed_command(main_config_path: str, num_gpus: int = 1) -> str:
-    script_path = "train.py" 
+    script_path = resolve_project_path("scripts/train_dpgui.py")
     safe_config_path = shlex.quote(main_config_path)
     safe_script_path = shlex.quote(script_path)
-    
-    # Port initial (sera vérifié par job_manager)
     port = random.randint(30000, 50000)
-    
-    # Note: --num_gpus est géré par deepspeed launcher
     cmd = f"deepspeed --num_gpus={num_gpus} --master_port={port} {safe_script_path} --config {safe_config_path}"
     return cmd

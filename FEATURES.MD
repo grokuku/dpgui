@@ -1,33 +1,29 @@
-# DPGui Features Overview
+--- START OF FILE FEATURES.MD ---
 
-## 🖥️ Dashboard & Monitoring
-- [x] **Real-time Stats**: Live CPU, RAM, and per-GPU (Temp, Fan, VRAM, Power) monitoring.
-- [x] **Job Status**: Visual indicators for Pending, Running, Completed, and Failed jobs.
-- [x] **Live Logs**: WebSocket-based terminal to view training logs in real-time (Non-blocking implementation).
+# DPGui Features & Status
 
-## ⚙️ Job Management
-- [x] **Configuration Generator**: GUI for `diffusion-pipe` TOML configuration (Z-Image focused).
-- [x] **Job Pool**: Save configurations to a pool without running them immediately.
-- [x] **Queue System**: Drag jobs from Pool to Queue. Auto-execution of the next job.
-- [x] **History**: View logs and configurations of past jobs.
-- [ ] **Execution Reliability**: currently blocked by dependency hell (Torch version mismatch).
+## Core System
+| Feature | Status | Notes |
+| :--- | :---: | :--- |
+| **Launcher** | ✅ Ready | Auto-installs Node, PyTorch, CUDA deps. Handles Symlinks. |
+| **Process Manager** | ✅ Ready | Async process handling, PID management, graceful shutdowns. |
+| **Log Streaming** | ✅ Ready | WebSocket based, real-time updates, circular buffer. |
+| **Port Management** | ✅ Ready | Auto-detection and conflict resolution for DDP ports. |
 
-## 📂 Dataset Manager
-A full-featured IDE for preparing training data. **(COMPLETED Phase 4)**
+## Training Engine (Strategic Pivot)
+| Feature | Status | Notes |
+| :--- | :---: | :--- |
+| **Vendor Integration** | ⚠️ Partial | `diffusion-pipe` libs mapped. Script patching abandoned. |
+| **DeepSpeed** | 🔄 Refactor | Moving to Custom Training Loop to support ZeRO-2 Offload. |
+| **Memory Opt.** | ⚙️ Configured | ZeRO Stage 2 + CPU Offload enabled in config. |
+| **Compatibility** | ✅ Fixed | Pydantic V2 & CUDA 13.0/12.8 mismatch solved via config/env vars. |
 
-### Organization
-- [x] **CRUD**: Create, Rename, Clone, and Delete entire datasets.
-- [x] **Export**: Download datasets as `.zip` files.
-- [x] **Navigation**: Keyboard-friendly grid navigation (Arrows, Shift+Click selection).
+## User Interface
+| Feature | Status | Notes |
+| :--- | :---: | :--- |
+| **Dashboard** | ✅ Ready | GPU monitoring placeholder, System stats. |
+| **Job Wizard** | ✅ Ready | Complex form validation, TOML/JSON preview. |
+| **Terminal** | ✅ Ready | XTerm.js integration, ANSI color support. |
+| **Dataset Manager** | 🚧 Pending | Basic path selection ready, advanced tools planned. |
 
-### Image & Caption Editing
-- [x] **Split-View**: Efficient workflow with image grid on the left and editor on the right.
-- [x] **Auto-Save**: Captions save automatically 1 second after typing stops.
-- [x] **Fullscreen**: Double-click to view images in high resolution.
-- [x] **Drag'n'Drop**: Upload images and existing `.txt` captions directly into the browser.
-
-### Batch Tools
-- [x] **Batch Resize**: Resize multiple images to standard resolutions (512, 768, 1024) preserving aspect ratio.
-- [x] **Trigger Words**: Inject trigger words into the start/end of caption files for selected images.
-- [x] **Bulk Delete**: Remove multiple images and their associated text files instantly.
-- [ ] **Auto-Tagging**: Integration with WD14/JoyCaption (Planned Phase 5).
+--- END OF FILE FEATURES.MD ---

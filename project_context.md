@@ -8,23 +8,24 @@
 ## Current State
 - **Phase**: Phase 5 (Training Execution) **STRATEGIC PIVOT**.
 - **Environment**: 
-    - **Stable**: Python 3.11 + PyTorch 2.9.1 + CUDA 12.8.
-    - **Hardware**: 5 GPUs setup.
+    - **Stable**: Python 3.11 + PyTorch 2.9.1 + CUDA 12.8 (System CUDA 13.0).
+    - **DeepSpeed**: 0.17.0.
+    - **Hardware**: 5 GPUs cluster (Consumer Grade -> Requires ZeRO-Offload).
 - **Status**: 
-    - The "Vendor/Non-destructive" approach for `diffusion-pipe` is officially **abandoned**.
-    - Native Pipeline Parallelism failed (defaulted to Data Parallelism -> OOM).
-    - ZeRO integration failed on original script (Architecture conflict).
+    - **Patched Vendor Script**: **ABANDONED**. The vendor script enforces `PipelineParallelism` which is architecturally incompatible with `ZeRO-Stage 2` (CPU Offload). We cannot use one without disabling the other, and we need ZeRO-2 for memory constraints.
+    - **New Strategy**: **"Hybrid Rewrite"**. We will create a custom training script (`train_dpgui_custom.py`) starting from zero, but reusing the vendor's data loading and model loading modules.
 
-## Strategic Change (Dec 2025)
-**Decision**: We will no longer treat `diffusion-pipe` as a read-only dependency. We will implement a **"Heavy Modification"** strategy.
-**Goal**: We will take ownership of the training logic to ensure it fits consumer/prosumer hardware constraints (ZeRO + Model Parallelism).
+## Technical Insights (Learned Hard Way)
+1.  **ZeRO vs Pipeline**: DeepSpeed strictly forbids combining ZeRO-Stage 2 (Offload) with Pipeline Parallelism (`AssertionError: ZeRO-2 and ZeRO-3 are incompatible with pipeline parallelism`).
+2.  **Pydantic V2 & DeepSpeed**: DeepSpeed 0.17+ fails with Pydantic V2 if using client-side optimizer objects + Offload due to strict config validation (`Extra inputs not permitted`).
+    *   *Solution*: Do **not** instantiate the optimizer in Python. Configure it entirely via the `ds_config` dictionary (type: "AdamW") so DeepSpeed builds its native `DeepSpeedCPUAdam` internally.
+3.  **CUDA Mismatch**: System CUDA (13.0) vs PyTorch CUDA (12.8) prevents JIT compilation of CPU Adam.
+    *   *Solution*: Set env var `DS_SKIP_CUDA_CHECK=1`.
 
 ## Next Steps (Next Session)
-1.  **Refactor `train.py` (The "Hard Patch")**:
-    - Completely rewrite the initialization sequence.
-    - Instantiate the Optimizer **BEFORE** `deepspeed.initialize()`.
-    - Pass the optimizer explicitly to DeepSpeed to enable ZeRO (Stage 1/2).
-2.  **Config Update**:
-    - Re-enable `zero_optimization` in `config_gen.py`.
-    - Ensure `pipeline_stages` maps correctly to GPU count in the generated config.
-3.  **Execution**: Validate the new custom script on the 5-GPU cluster.
+1.  **Architecture**: Design `train_dpgui_custom.py`.
+    -   **Import**: Reuse `utils.dataset` and model loading from vendor.
+    -   **Engine**: Use Standard DeepSpeed Engine (NOT PipelineEngine).
+    -   **Loop**: Implement a standard `for batch in dataloader` training loop.
+2.  **Implementation**: Write and test the script on the 5-GPU cluster.
+3.  **Validation**: Verify ZeRO-2 Offload is active and memory is stable.

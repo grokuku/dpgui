@@ -1,29 +1,26 @@
---- START OF FILE FEATURES.MD ---
-
-# DPGui Features & Status
+# ZeRO-Pipe Features & Status
 
 ## Core System
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
 | **Launcher** | ✅ Ready | Auto-installs Node, PyTorch, CUDA deps. Handles Symlinks. |
 | **Process Manager** | ✅ Ready | Async process handling, PID management, graceful shutdowns. |
-| **Log Streaming** | ✅ Ready | WebSocket based, real-time updates, circular buffer. |
+| **Log Streaming** | ✅ Ready | WebSocket based, real-time updates. |
 | **Port Management** | ✅ Ready | Auto-detection and conflict resolution for DDP ports. |
 
-## Training Engine (Strategic Pivot)
+## Training Engine (ZeroPipe)
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
-| **Vendor Integration** | ⚠️ Partial | `diffusion-pipe` libs mapped. Script patching abandoned. |
-| **DeepSpeed** | 🔄 Refactor | Moving to Custom Training Loop to support ZeRO-2 Offload. |
-| **Memory Opt.** | ⚙️ Configured | ZeRO Stage 2 + CPU Offload enabled in config. |
-| **Compatibility** | ✅ Fixed | Pydantic V2 & CUDA 13.0/12.8 mismatch solved via config/env vars. |
+| **Engine Core** | 🚧 Beta | `zeropipe.py` implements custom Flat Model wrapper. |
+| **Multi-GPU** | ⚠️ Debug | OOM (System RAM) issues during dataset broadcast on 5 GPUs. |
+| **ZeRO-2 Offload** | ⚙️ Ready | Configured in `config_gen.py`, waiting for stable run. |
+| **Model Support** | ✅ Mapped | SDXL, Flux, Hunyuan, LTX, Wan, Cosmos, Lumina, Z-Image. |
+| **LoRA/Full** | ✅ Ready | Engine supports both Adapter and Full Fine-Tuning modes. |
 
 ## User Interface
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
-| **Dashboard** | ✅ Ready | GPU monitoring placeholder, System stats. |
+| **Dashboard** | ✅ Ready | GPU monitoring, System stats. |
 | **Job Wizard** | ✅ Ready | Complex form validation, TOML/JSON preview. |
-| **Terminal** | ✅ Ready | XTerm.js integration, ANSI color support. |
+| **Terminal** | ✅ Ready | XTerm.js integration. |
 | **Dataset Manager** | 🚧 Pending | Basic path selection ready, advanced tools planned. |
-
---- END OF FILE FEATURES.MD ---

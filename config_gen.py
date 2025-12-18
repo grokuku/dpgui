@@ -73,17 +73,24 @@ def generate_toml_files(config: TrainingConfig, base_path: str = "generated_conf
         main_data["monitoring"] = config.monitoring.model_dump(exclude={"enable_wandb"})
         main_data["monitoring"] = {k: v for k, v in main_data["monitoring"].items() if v is not None}
 
-    # --- OPTIMISATION VRAM AUTOMATIQUE ---
+    # --- OPTIMISATION ZEROPIPE (RAM SAFE) ---
     
-    # 1. Force Gradient Checkpointing
+    # 1. Force Gradient Checkpointing (Critical for VRAM)
     main_data["gradient_checkpointing"] = True
     
-    # 2. ZeRO Optimization (STRATEGIC PIVOT: ENABLED)
+    # 2. Pipeline Stages = 1 (Required for ZeRO)
+    main_data["pipeline_stages"] = 1
+    
+    # 3. ZeRO-3 Configuration (RAM Optimized)
     main_data["zero_optimization"] = {
-        "stage": 2,
+        "stage": 3,
         "offload_optimizer": {
             "device": "cpu",
-            "pin_memory": True
+            "pin_memory": False # FALSE to save System RAM
+        },
+        "offload_param": {
+            "device": "cpu",
+            "pin_memory": False # FALSE to save System RAM
         },
         "allgather_partitions": True,
         "allgather_bucket_size": 2e8,
@@ -91,14 +98,10 @@ def generate_toml_files(config: TrainingConfig, base_path: str = "generated_conf
         "reduce_bucket_size": 2e8,
         "overlap_comm": True,
         "contiguous_gradients": True,
-        # --- AJOUT CRITIQUE POUR FIXER L'ERREUR ---
-        "zero_force_ds_cpu_optimizer": False 
-        # ------------------------------------------
+        "stage3_gather_16bit_weights_on_model_save": True # Important for ZeRO-3 saving
     }
     
-    # --------------------------------------------------
-    
-    # Nettoyage global des None pour éviter les erreurs TOML
+    # Nettoyage global des None
     main_data = {k: v for k, v in main_data.items() if v is not None}
 
     with open(main_toml_path, "w") as f:
@@ -107,9 +110,15 @@ def generate_toml_files(config: TrainingConfig, base_path: str = "generated_conf
     return os.path.abspath(main_toml_path)
 
 def generate_deepspeed_command(main_config_path: str, num_gpus: int = 1) -> str:
-    script_path = resolve_project_path("scripts/train_dpgui.py")
+    # --- TARGET SCRIPT: ZEROPIPE ---
+    script_path = resolve_project_path("scripts/zeropipe.py")
+    
     safe_config_path = shlex.quote(main_config_path)
     safe_script_path = shlex.quote(script_path)
+    
+    # Port generation is handled by job_manager now if needed, but we keep a random default here
     port = random.randint(30000, 50000)
+    
+    # Standard DeepSpeed Launch
     cmd = f"deepspeed --num_gpus={num_gpus} --master_port={port} {safe_script_path} --config {safe_config_path}"
     return cmd

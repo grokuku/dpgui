@@ -1,31 +1,47 @@
-# Project Context: DPGui
+# Project Context: ZeRO-Pipe (formerly DPGui)
 
 ## ⚠️ AI KNOWLEDGE WARNING
-**Crucial Note for Development:** The AI model used for this project has a knowledge cutoff (early 2023) that conflicts with the current environment (Late 2025).
+**Crucial Note:** The AI model used for this project has a knowledge cutoff (early 2023).
 *   **Reality:** PyTorch Stable is **2.9.1**, CUDA is **12.8** or **13.0**.
-*   **Rule:** Always verify versions via `pip check` or official docs.
+*   **Rule:** Always verify versions via `pip check`.
+
+## Project Identity
+- **Name**: ZeRO-Pipe
+- **Goal**: GUI and Orchestration layer for `diffusion-pipe` with native ZeRO-Stage 2/3 support.
+- **Target Hardware**: Multi-GPU Consumer Clusters (e.g., 5x RTX 3090/4090).
 
 ## Current State
-- **Phase**: Phase 5 (Training Execution) **STRATEGIC PIVOT**.
+- **Phase**: Phase 5 (Training Execution - Custom Engine & Debugging).
 - **Environment**: 
-    - **Stable**: Python 3.11 + PyTorch 2.9.1 + CUDA 12.8 (System CUDA 13.0).
-    - **DeepSpeed**: 0.17.0.
-    - **Hardware**: 5 GPUs cluster (Consumer Grade -> Requires ZeRO-Offload).
-- **Status**: 
-    - **Patched Vendor Script**: **ABANDONED**. The vendor script enforces `PipelineParallelism` which is architecturally incompatible with `ZeRO-Stage 2` (CPU Offload). We cannot use one without disabling the other, and we need ZeRO-2 for memory constraints.
-    - **New Strategy**: **"Hybrid Rewrite"**. We will create a custom training script (`train_dpgui_custom.py`) starting from zero, but reusing the vendor's data loading and model loading modules.
+    - Python 3.11 + PyTorch 2.9.1 + CUDA 12.8.
+    - DeepSpeed 0.17.0.
+- **Engine**: `scripts/zeropipe.py` (Custom Flat Model Wrapper + ZeRO-3 Init).
 
-## Technical Insights (Learned Hard Way)
-1.  **ZeRO vs Pipeline**: DeepSpeed strictly forbids combining ZeRO-Stage 2 (Offload) with Pipeline Parallelism (`AssertionError: ZeRO-2 and ZeRO-3 are incompatible with pipeline parallelism`).
-2.  **Pydantic V2 & DeepSpeed**: DeepSpeed 0.17+ fails with Pydantic V2 if using client-side optimizer objects + Offload due to strict config validation (`Extra inputs not permitted`).
-    *   *Solution*: Do **not** instantiate the optimizer in Python. Configure it entirely via the `ds_config` dictionary (type: "AdamW") so DeepSpeed builds its native `DeepSpeedCPUAdam` internally.
-3.  **CUDA Mismatch**: System CUDA (13.0) vs PyTorch CUDA (12.8) prevents JIT compilation of CPU Adam.
-    *   *Solution*: Set env var `DS_SKIP_CUDA_CHECK=1`.
+## Critical Blocker: System RAM OOM (SIGKILL -9)
+- **Status**: 🔴 BLOCKING
+- **Symptoms**: 
+    - **Rank 0 is killed (SIGKILL -9)** immediately after finishing model initialization (exiting `deepspeed.zero.Init` context).
+    - Ranks 1-4 crash with `Connection reset by peer` / `Broken pipe` (TCPStore failure) because Rank 0 dies.
+    - **Context**: 5x GPUs, SDXL Model, 64GB System RAM.
+- **Progress**:
+    - ✅ Fixed `TypeError` by manually calculating global batch size.
+    - ✅ Fixed `NotImplementedError: Cannot copy out of meta tensor` via Monkeypatch.
+    - ✅ Model structure initializes successfully on Meta device (`num_params = 1533`).
+    - ❌ The actual partitioning or buffer allocation upon exiting `zero.Init` still spikes RAM beyond 64GB with 5 processes.
 
-## Next Steps (Next Session)
-1.  **Architecture**: Design `train_dpgui_custom.py`.
-    -   **Import**: Reuse `utils.dataset` and model loading from vendor.
-    -   **Engine**: Use Standard DeepSpeed Engine (NOT PipelineEngine).
-    -   **Loop**: Implement a standard `for batch in dataloader` training loop.
-2.  **Implementation**: Write and test the script on the 5-GPU cluster.
-3.  **Validation**: Verify ZeRO-2 Offload is active and memory is stable.
+## Technical Decisions
+1.  **Architecture**: Use `SingleStageModel` (Flat Wrapper) + Standard DeepSpeed Engine.
+2.  **Compatibility**: Force `DS_SKIP_CUDA_CHECK=1`.
+3.  **RAM Optimization Strategy (Active)**:
+    - **ZeRO Stage 3**: Partitioning parameters to reduce redundancy.
+    - **`deepspeed.zero.Init()`**: Allocating weights on "Meta" device during construction.
+    - **Monkeypatch**: Patched `deepspeed.runtime.zero.partition_parameters.Init._post_init_method` to bypass transformer/diffusers meta-tensor access errors.
+    - **`pin_memory=False`**: Disabled in config to save RAM.
+    - **Dataset Workers**: Forced `NUM_PROC=1`.
+    - **Lazy Loading**: Dataset is memory-mapped, not broadcast via TCP.
+
+## Next Steps
+1.  **Reduce Parallelism (Diagnosis)**: Run with **2 GPUs** instead of 5 to confirm if the OOM is strictly due to the number of processes (5x overhead) or a single-process leak.
+2.  **Swap/Paged RAM**: Verify system swap usage.
+3.  **Pre-Materialization**: Investigate if specific SDXL components (CLIP, VAE) are being materialized in RAM by `diffusers` *before* DeepSpeed can shard them, despite the `zero.Init` context.
+4.  **Empty Cache Aggressively**: Force Python GC and CUDA cache clearing between every major initialization step.
